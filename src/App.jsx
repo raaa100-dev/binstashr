@@ -42,7 +42,8 @@ export default function App() {
 
 function Main({ user }) {
   const [items, setItems] = useState([])
-  const [resellerMode, setResellerMode] = useState(false)
+  const [resellerPersonal, setResellerPersonal] = useState(false)   // for Personal space
+  const [resellerBySpace, setResellerBySpace] = useState({})        // per-household overrides
   const [households, setHouseholds] = useState([])
   const [space, setSpace] = useState(null)        // null = personal; else household id
   const [maps, setMaps] = useState([])
@@ -66,7 +67,8 @@ function Main({ user }) {
     (async () => {
       try {
         const [s, hs] = await Promise.all([fetchSettings(user.id), fetchHouseholds(user.id)])
-        setResellerMode(s.resellerMode)
+        setResellerPersonal(s.resellerMode)
+        setResellerBySpace(s.resellerBySpace || {})
         setHouseholds(hs)
         setPlan(planState(s.plan, s.trialEnds))
         setDefaultLabelSize(s.defaultLabelSize || null)
@@ -113,12 +115,20 @@ function Main({ user }) {
     setView('form')
   }
 
+  // Effective reseller mode for the active space.
+  const resellerMode = space ? !!resellerBySpace[space] : !!resellerPersonal
+
   async function toggleReseller() {
-    // Reseller mode is a full-access feature.
     if (!plan.fullAccess && !resellerMode) { setView('upgrade'); return }
-    const next = !resellerMode
-    setResellerMode(next)
-    try { await saveSettings(user.id, { resellerMode: next }) } catch (e) { flash('Could not save setting') }
+    if (space) {
+      const nextMap = { ...resellerBySpace, [space]: !resellerBySpace[space] }
+      setResellerBySpace(nextMap)
+      try { await saveSettings(user.id, { resellerBySpace: nextMap }) } catch (e) { flash('Could not save setting') }
+    } else {
+      const next = !resellerPersonal
+      setResellerPersonal(next)
+      try { await saveSettings(user.id, { resellerMode: next }) } catch (e) { flash('Could not save setting') }
+    }
   }
 
   async function saveItem(item) {
@@ -346,7 +356,7 @@ function Main({ user }) {
       {view === 'households' && <HouseholdsView user={user} households={households} space={space} setSpace={setSpace} reload={reloadHouseholds} onBack={() => setView('more')} flash={flash} plan={plan} onUpgrade={() => setView('upgrade')} />}
       {view === 'upgrade' && <UpgradeView plan={plan} itemCount={items.length} onUpgrade={simulateUpgrade} onBack={() => setView('more')} />}
       {view === 'orderlabels' && <OrderLabelsView user={user} onBack={() => setView('more')} flash={flash} />}
-      {view === 'settings' && <SettingsView resellerMode={resellerMode} toggleReseller={toggleReseller} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} email={user.email} plan={plan} onUpgrade={() => setView('upgrade')} defaultLabelSize={defaultLabelSize} setDefaultLabelSize={async (s) => { setDefaultLabelSize(s); try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {} }} />}
+      {view === 'settings' && <SettingsView resellerMode={resellerMode} toggleReseller={toggleReseller} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} email={user.email} plan={plan} onUpgrade={() => setView('upgrade')} defaultLabelSize={defaultLabelSize} setDefaultLabelSize={async (s) => { setDefaultLabelSize(s); try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {} }} spaceName={space ? (households.find((h) => h.id === space)?.name || 'this household') : 'Personal'} />}
       {view === 'profile' && <ProfileView user={user} plan={plan} itemCount={items.length} households={households} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} />}
       {view === 'help' && <HelpView onBack={() => setView('more')} />}
       {view === 'terms' && <LegalView title="Terms of Service" body={<TermsText />} onBack={() => setView('more')} />}
@@ -1904,7 +1914,7 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
 }
 
 /* ---------------- Settings ---------------- */
-function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, plan, onUpgrade, defaultLabelSize, setDefaultLabelSize }) {
+function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, plan, onUpgrade, defaultLabelSize, setDefaultLabelSize, spaceName }) {
   const planLabel = plan ? ({ trial: `Free trial · ${plan.trialDaysLeft}d left`, active: 'Plus (paid) · active', comp: 'Complimentary access', free: 'Free plan' }[plan.state] || plan.state) : ''
   return (
     <>
@@ -1935,9 +1945,9 @@ function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, pl
       <div className="card" style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{ flex: 1 }}>
-            <p style={{ fontWeight: 500, margin: 0 }}>Reseller mode</p>
+            <p style={{ fontWeight: 500, margin: 0 }}>Reseller mode <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· {spaceName}</span></p>
             <p className="muted" style={{ fontSize: 13, margin: '4px 0 0', lineHeight: 1.5 }}>
-              Adds cost, sale price, marketplace, SKU and status to each item, plus a profit summary. Turn off for simple home organizing.
+              Per-space setting. Adds cost, sale price, marketplace, SKU and status to each item, plus a profit summary — for this space only. Switch the space on the main screen to toggle reseller mode for a different one.
             </p>
           </div>
           <button className={`toggle ${resellerMode ? 'on' : ''}`} aria-label="Toggle reseller mode" onClick={toggleReseller}>

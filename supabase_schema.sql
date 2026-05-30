@@ -42,6 +42,10 @@ alter table public.settings add column if not exists created_at timestamptz not 
 alter table public.settings add column if not exists default_label_size text;
 alter table public.settings add column if not exists terms_version integer default 0;
 alter table public.settings add column if not exists terms_agreed_at timestamptz;
+-- Per-household reseller mode overrides for this user.
+-- JSON object like {"<household-uuid>": true, "<household-uuid>": false}.
+-- Personal space (null) still uses the top-level reseller_mode column.
+alter table public.settings add column if not exists reseller_by_space jsonb not null default '{}'::jsonb;
 
 -- ----- Households -----
 create table if not exists public.households (
