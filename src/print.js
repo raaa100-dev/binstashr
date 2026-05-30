@@ -1,63 +1,106 @@
 import QRCode from 'qrcode'
 import { shortCode } from './utils'
 
-export async function qrDataUrl(text, size = 220) {
-  return QRCode.toDataURL(text, { width: size, margin: 1, errorCorrectionLevel: 'M' })
-}
+// Label size catalog. Dimensions are in inches.
+// For thermal/single-label printers, each label is its own page; for sheets,
+// labels flow in a grid that matches Avery layouts.
+export const LABEL_SIZES = [
+  { id: 'letter',       label: 'Letter sheet (1 big label)', w: 4,      h: 3,      kind: 'sheet',   gridCols: 1, gridRows: 1 },
+  { id: 'avery-5160',   label: 'Avery 5160 (1×2-5/8")',      w: 2.625,  h: 1,      kind: 'sheet',   gridCols: 3, gridRows: 10 },
+  { id: 'dymo-30252',   label: 'Dymo 30252 (1-1/8×3-1/2")',  w: 3.5,    h: 1.125,  kind: 'roll' },
+  { id: 'brother-dk1201', label: 'Brother DK-1201 (1.1×3.5")', w: 3.5,  h: 1.1,    kind: 'roll' },
+  { id: '2x4',          label: '2×4" shipping',              w: 4,      h: 2,      kind: 'roll' },
+  { id: '4x6',          label: '4×6" thermal',               w: 4,      h: 6,      kind: 'roll' },
+]
+export const DEFAULT_SIZE = 'avery-5160'
 
 const esc = (s) => (s || '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
-export async function printLabel(item) {
-  const qr = await qrDataUrl(item.id)
-  const w = window.open('', '_blank')
-  if (!w) { alert('Please allow pop-ups to print.'); return }
-  w.document.write(`<html><head><title>Label</title><style>
-    body{font-family:sans-serif;text-align:center;padding:24px;}
-    .label{border:2px solid #000;border-radius:10px;padding:18px;display:inline-block;max-width:300px;}
-    h1{font-size:20px;margin:12px 0 2px;} p{margin:0;font-size:14px;color:#444;}
-    .loc{color:#000;font-weight:bold;margin-top:6px;} img{width:200px;height:200px;}
-  </style></head><body><div class="label">
-    <img src="${qr}"/><h1>${esc(item.name)}</h1><p>${esc(item.category) || ''}</p>
-    ${item.location ? `<p class="loc">${esc(item.location)}</p>` : ''}
-  </div><script>setTimeout(()=>window.print(),350)<\/script></body></html>`)
-  w.document.close()
+export async function qrDataUrl(text, size = 220) {
+  return QRCode.toDataURL(text, { width: size, margin: 1, errorCorrectionLevel: 'M' })
 }
 
-export async function printBlanks(ids) {
-  if (!ids.length) return
-  const cards = await Promise.all(ids.map(async (id) => {
-    const qr = await qrDataUrl(id, 180)
-    return `<div class="label"><img src="${qr}"/>
-      <div class="code">${shortCode(id)}</div></div>`
-  }))
-  const w = window.open('', '_blank')
-  if (!w) { alert('Please allow pop-ups to print.'); return }
-  w.document.write(`<html><head><title>Blank labels</title><style>
-    body{font-family:sans-serif;padding:16px;display:flex;flex-wrap:wrap;gap:14px;}
-    .label{border:1.5px solid #000;border-radius:8px;padding:12px;width:170px;text-align:center;page-break-inside:avoid;}
-    .code{font-size:18px;font-weight:bold;margin-top:8px;letter-spacing:1px;font-family:monospace;}
-    img{width:150px;height:150px;}
-  </style></head><body>${cards.join('')}<script>setTimeout(()=>window.print(),450)<\/script></body></html>`)
-  w.document.close()
+// Build a single label's inner HTML given the size and content.
+function labelHTML(size, qr, lines) {
+  // Tune QR size and font for the label dimensions.
+  const isTiny = size.w < 3
+  const qrPx = isTiny ? (size.h * 72) : Math.min(size.w, size.h) * 60
+  const nameSize = isTiny ? '11pt' : '14pt'
+  const subSize = isTiny ? '8pt' : '10pt'
+  return `
+    <div class="lbl" style="width:${size.w}in;height:${size.h}in;">
+      <img src="${qr}" style="width:${qrPx}px;height:${qrPx}px;"/>
+      <div class="txt">
+        ${lines.map((l, i) => `<div style="font-size:${i === 0 ? nameSize : subSize};${i === 0 ? 'font-weight:bold;' : 'color:#555;'}line-height:1.15;">${esc(l)}</div>`).join('')}
+      </div>
+    </div>`
 }
 
-export async function printAll(items) {
+// Generate the print HTML for a list of labels at a chosen size.
+async function buildSheet(labels, sizeId) {
+  const size = LABEL_SIZES.find((s) => s.id === sizeId) || LABEL_SIZES.find((s) => s.id === DEFAULT_SIZE)
+  // pre-generate QR codes
+  const labelsWithQR = await Promise.all(labels.map(async (l) => ({ ...l, qr: await qrDataUrl(l.id, 220) })))
+  const labelDivs = labelsWithQR.map((l) => labelHTML(size, l.qr, l.lines)).join('')
+
+  // Different CSS depending on sheet vs roll/single
+  const pageCss = size.kind === 'roll'
+    ? `@page { size: ${size.w}in ${size.h}in; margin: 0; }
+       body { margin: 0; padding: 0; }
+       .lbl { page-break-after: always; }
+       .lbl:last-child { page-break-after: auto; }`
+    : size.id === 'avery-5160'
+      ? `@page { size: letter; margin: 0.5in 0.1875in; }
+         body { margin: 0; }
+         .sheet { display: grid; grid-template-columns: repeat(${size.gridCols}, ${size.w}in); grid-auto-rows: ${size.h}in; column-gap: 0.125in; }
+         .lbl { box-sizing: border-box; }`
+      : `@page { size: letter; margin: 0.5in; }
+         body { margin: 0; }
+         .lbl { margin: 0 auto 0.5in; }`
+
+  return `<!doctype html><html><head><title>Labels</title><style>
+    ${pageCss}
+    .lbl { display: flex; align-items: center; gap: 0.08in; padding: 0.06in; box-sizing: border-box; overflow: hidden; }
+    .lbl img { flex-shrink: 0; }
+    .lbl .txt { flex: 1; min-width: 0; overflow: hidden; }
+    .lbl .txt div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; -webkit-print-color-adjust: exact; }
+  </style></head><body>
+    ${size.kind === 'sheet' && size.id !== 'letter' ? `<div class="sheet">${labelDivs}</div>` : labelDivs}
+    <script>setTimeout(()=>window.print(),400)<\/script>
+  </body></html>`
+}
+
+function openPrint(html) {
+  const w = window.open('', '_blank')
+  if (!w) { alert('Please allow pop-ups to print.'); return }
+  w.document.write(html); w.document.close()
+}
+
+// Print one label for a single container, at the given size.
+export async function printLabel(item, sizeId = DEFAULT_SIZE) {
+  const lines = [item.name || 'Untitled']
+  if (item.category) lines.push(item.category)
+  if (item.location) lines.push(item.location)
+  openPrint(await buildSheet([{ id: item.id, lines }], sizeId))
+}
+
+// Print labels for many containers, at the given size.
+export async function printAll(items, sizeId = DEFAULT_SIZE) {
   if (!items.length) return
-  const cards = await Promise.all(items.map(async (it) => {
-    const qr = await qrDataUrl(it.id, 180)
-    return `<div class="label"><img src="${qr}"/>
-      <div class="name">${esc(it.name)}</div>
-      <div class="cat">${esc(it.category) || ''}</div>
-      ${it.location ? `<div class="loc">${esc(it.location)}</div>` : ''}</div>`
-  }))
-  const w = window.open('', '_blank')
-  if (!w) { alert('Please allow pop-ups to print.'); return }
-  w.document.write(`<html><head><title>All labels</title><style>
-    body{font-family:sans-serif;padding:16px;display:flex;flex-wrap:wrap;gap:14px;}
-    .label{border:1.5px solid #000;border-radius:8px;padding:12px;width:190px;text-align:center;page-break-inside:avoid;}
-    .name{font-size:15px;font-weight:bold;margin-top:6px;} .cat{font-size:12px;color:#555;}
-    .loc{font-size:12px;font-weight:bold;margin-top:3px;} img{width:150px;height:150px;}
-  </style></head><body>${cards.join('')}<script>setTimeout(()=>window.print(),450)<\/script></body></html>`)
-  w.document.close()
+  const labels = items.map((it) => {
+    const lines = [it.name || 'Untitled']
+    if (it.category) lines.push(it.category)
+    if (it.location) lines.push(it.location)
+    return { id: it.id, lines }
+  })
+  openPrint(await buildSheet(labels, sizeId))
+}
+
+// Print blank labels (just QR + short human-readable code).
+export async function printBlanks(ids, sizeId = DEFAULT_SIZE) {
+  if (!ids.length) return
+  const labels = ids.map((id) => ({ id, lines: [shortCode(id)] }))
+  openPrint(await buildSheet(labels, sizeId))
 }

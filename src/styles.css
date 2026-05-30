@@ -110,6 +110,43 @@ label.field { font-size: 13px; color: var(--text-2); display: block; margin-bott
 @keyframes spin { to { transform: rotate(360deg); } }
 .full-center { min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
 
+/* ---- Bottom tab nav ---- */
+.app { padding-bottom: calc(72px + env(safe-area-inset-bottom) + 12px); }
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; justify-content: space-around; align-items: stretch;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+}
+.tabbar .inner { max-width: 560px; margin: 0 auto; display: flex; width: 100%; }
+.tab {
+  flex: 1; background: none; border: 0; padding: 8px 4px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  color: var(--text-2); font-size: 11px; font-weight: 500; cursor: pointer;
+}
+.tab .ic { font-size: 22px; line-height: 1; }
+.tab.active { color: var(--brand); }
+.tab.center { color: #fff; }
+.tab.center .pill-btn {
+  width: 50px; height: 50px; border-radius: 50%; background: var(--brand);
+  display: flex; align-items: center; justify-content: center; font-size: 26px;
+  margin-top: -18px; box-shadow: 0 3px 10px rgba(15,110,86,0.4);
+}
+.tab.center .label { color: var(--brand); margin-top: 2px; }
+
+/* ---- Modal sheet ---- */
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
+.modal-sheet {
+  background: var(--surface); border-radius: 16px 16px 0 0; width: 100%; max-width: 560px;
+  padding: 18px 18px calc(20px + env(safe-area-inset-bottom));
+  max-height: 80vh; overflow-y: auto;
+}
+.modal-sheet h3 { font-size: 17px; margin: 0 0 12px; }
+.size-opt { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; cursor: pointer; }
+.size-opt.sel { border-color: var(--brand); background: var(--brand-bg); }
+.size-opt .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-strong); flex-shrink: 0; }
+.size-opt.sel .dot { border-color: var(--brand); background: var(--brand); box-shadow: inset 0 0 0 3px #fff; }
+
 .auth-logo { width: 64px; height: 64px; border-radius: 16px; background: var(--brand); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 18px; }
 
 .toggle { width: 52px; height: 30px; border-radius: 999px; position: relative; border: 1px solid var(--border-strong); background: var(--surface-2); flex-shrink: 0; padding: 0; }

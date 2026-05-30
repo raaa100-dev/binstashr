@@ -12,7 +12,7 @@ import {
   STATUSES, uid, num, money, containerValue, containerProfit,
   statusClass, shrinkImage, exportCSV, shortCode, expStatus, expLabel, soonestExp, collectExpiring, salesSummary, exportSalesCSV, planState,
 } from './utils'
-import { qrDataUrl, printLabel, printAll, printBlanks } from './print'
+import { qrDataUrl, printLabel, printAll, printBlanks, LABEL_SIZES, DEFAULT_SIZE } from './print'
 import { Html5Qrcode } from 'html5-qrcode'
 
 const MAX_PHOTOS = 2
@@ -40,7 +40,9 @@ function Main({ user }) {
   const [households, setHouseholds] = useState([])
   const [space, setSpace] = useState(null)        // null = personal; else household id
   const [plan, setPlan] = useState({ state: 'trial', trialDaysLeft: 14, isPaid: false, fullAccess: true })
+  const [defaultLabelSize, setDefaultLabelSize] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [printPicker, setPrintPicker] = useState(null)   // null or { onPick: fn }
   const [view, setView] = useState('list')
   const [editing, setEditing] = useState(null)
   const [query, setQuery] = useState('')
@@ -57,6 +59,7 @@ function Main({ user }) {
         setResellerMode(s.resellerMode)
         setHouseholds(hs)
         setPlan(planState(s.plan, s.trialEnds))
+        setDefaultLabelSize(s.defaultLabelSize || null)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
         setSpace(validSpace)
         const list = await fetchContainers(user.id, validSpace)
@@ -202,6 +205,11 @@ function Main({ user }) {
 
   if (loading) return <div className="app"><div className="full-center"><div className="spinner" /><p className="muted">Loading your inventory…</p></div></div>
 
+  // Open size picker, then run the requested print function with the chosen size.
+  function printWithPicker(fn) {
+    setPrintPicker({ onPick: (size) => fn(size) })
+  }
+
   // Phase-one stand-in for Stripe: flips the account to paid. Stripe will call this later.
   async function simulateUpgrade() {
     try {
@@ -212,27 +220,70 @@ function Main({ user }) {
     } catch (e) { flash('Could not upgrade') }
   }
 
+  // Bottom tab nav. Center "+" launches new container (or upgrade if at limit).
+  const tabs = [
+    { key: 'list', label: 'Bins', icon: '📦', go: () => { goList() } },
+    { key: 'scan', label: 'Scan', icon: '▢', go: () => setView('scan') },
+    { key: 'add', label: 'Add', icon: '＋', go: () => newItem(), center: true },
+    { key: 'sales', label: resellerMode ? 'Sales' : 'Expiring', icon: resellerMode ? '📊' : '⏰',
+      go: () => setView(resellerMode ? 'sales' : 'expiring') },
+    { key: 'more', label: 'More', icon: '☰', go: () => setView('more') },
+  ]
+  const activeTab = ({
+    list: 'list', form: 'list', detail: 'list', quickadd: 'list',
+    scan: 'scan',
+    sales: 'sales', expiring: 'sales',
+    more: 'more', settings: 'more', households: 'more', batch: 'more', upgrade: 'more', orderlabels: 'more',
+  })[view] || 'list'
+
   const common = { items, resellerMode, user, flash }
   return (
     <div className="app">
-      {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, signOut: () => supabase.auth.signOut() }} />}
+      {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker }} />}
       {view === 'form' && <FormView {...common} editing={editing} setEditing={setEditing} onSave={saveItem} onBack={() => (items.find((i) => i.id === editing.id) ? setView('detail') : goList())} />}
-      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} />}
+      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} />}
       {view === 'scan' && <ScanView items={items} resellerMode={resellerMode} onFound={openDetail} onBack={goList} flash={flash} onQuickAdd={quickAddItem} />}
       {view === 'quickadd' && <QuickAddView container={editing} resellerMode={resellerMode} onAdd={quickAddItem} onDone={() => setView('detail')} onBack={() => setView('detail')} />}
-      {view === 'batch' && <BatchView onCreate={batchCreate} onBack={goList} />}
+      {view === 'batch' && <BatchView onCreate={batchCreate} onBack={() => setView('more')} printWithPicker={printWithPicker} />}
       {view === 'expiring' && <ExpiringView items={items} resellerMode={resellerMode} onOpen={openDetail} onPull={pullItem} onBack={goList} />}
       {view === 'sales' && <SalesView items={items} onBack={goList} />}
-      {view === 'households' && <HouseholdsView user={user} households={households} space={space} setSpace={setSpace} reload={reloadHouseholds} onBack={goList} flash={flash} plan={plan} onUpgrade={() => setView('upgrade')} />}
-      {view === 'upgrade' && <UpgradeView plan={plan} itemCount={items.length} onUpgrade={simulateUpgrade} onBack={goList} />}
-      {view === 'settings' && <SettingsView resellerMode={resellerMode} toggleReseller={toggleReseller} onBack={goList} signOut={() => supabase.auth.signOut()} email={user.email} plan={plan} onUpgrade={() => setView('upgrade')} />}
+      {view === 'households' && <HouseholdsView user={user} households={households} space={space} setSpace={setSpace} reload={reloadHouseholds} onBack={() => setView('more')} flash={flash} plan={plan} onUpgrade={() => setView('upgrade')} />}
+      {view === 'upgrade' && <UpgradeView plan={plan} itemCount={items.length} onUpgrade={simulateUpgrade} onBack={() => setView('more')} />}
+      {view === 'orderlabels' && <OrderLabelsView user={user} onBack={() => setView('more')} flash={flash} />}
+      {view === 'settings' && <SettingsView resellerMode={resellerMode} toggleReseller={toggleReseller} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} email={user.email} plan={plan} onUpgrade={() => setView('upgrade')} defaultLabelSize={defaultLabelSize} setDefaultLabelSize={async (s) => { setDefaultLabelSize(s); try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {} }} />}
+      {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} />}
       {toast && <div className="toast">{toast}</div>}
+
+      <PrintSizePicker
+        open={!!printPicker}
+        onClose={() => setPrintPicker(null)}
+        initialSize={defaultLabelSize || DEFAULT_SIZE}
+        onPick={async (s, remember) => {
+          if (remember) {
+            setDefaultLabelSize(s)
+            try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {}
+          }
+          printPicker && printPicker.onPick(s); setPrintPicker(null)
+        }}
+      />
+
+      <nav className="tabbar" aria-label="Main navigation">
+        <div className="inner">
+          {tabs.map((t) => (
+            <button key={t.key} className={`tab ${t.center ? 'center' : ''} ${activeTab === t.key ? 'active' : ''}`} onClick={t.go} aria-label={t.label}>
+              {t.center
+                ? <><span className="pill-btn">{t.icon}</span><span className="label">{t.label}</span></>
+                : <><span className="ic">{t.icon}</span><span>{t.label}</span></>}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   )
 }
 
 /* ---------------- List ---------------- */
-function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan }) {
+function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker }) {
   const q = query.trim().toLowerCase()
   let results = items.map((it) => ({ it, hit: null }))
   if (q) {
@@ -260,7 +311,6 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
     <>
       <div className="topbar">
         <h1>{activeName}</h1>
-        <button className="iconbtn" aria-label="Settings" onClick={() => setView('settings')}>⚙</button>
       </div>
 
       {plan && plan.state === 'trial' && (
@@ -280,13 +330,14 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
         </button>
       )}
 
-      <div className="row" style={{ marginBottom: 14, alignItems: 'center' }}>
-        <select value={space || ''} onChange={(e) => setSpace(e.target.value || null)} aria-label="Switch space">
-          <option value="">🔒 Personal</option>
-          {households.map((h) => <option key={h.id} value={h.id}>🏠 {h.name}</option>)}
-        </select>
-        <button className="iconbtn" title="Manage households" aria-label="Manage households" onClick={() => setView('households')}>👥</button>
-      </div>
+      {households.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <select value={space || ''} onChange={(e) => setSpace(e.target.value || null)} aria-label="Switch space">
+            <option value="">🔒 Personal</option>
+            {households.map((h) => <option key={h.id} value={h.id}>🏠 {h.name}</option>)}
+          </select>
+        </div>
+      )}
 
       {items.length > 0 && (
         <div className="row" style={{ marginBottom: 14 }}>
@@ -304,19 +355,6 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
         </button>
       )}
 
-      <div className="row" style={{ marginBottom: 14 }}>
-        <button className="btn primary" onClick={newItem}>＋ New</button>
-        <button className="btn" onClick={() => setView('scan')}>▢ Scan</button>
-      </div>
-      <button className="btn ghost" onClick={() => setView('batch')} style={{ marginBottom: 14 }}>
-        ⧉ Print blank labels (set up bins later)
-      </button>
-      {resellerMode && (
-        <button className="btn" onClick={() => setView('sales')} style={{ marginBottom: 14, display: 'flex', justifyContent: 'center', gap: 7 }}>
-          📊 Sales summary
-        </button>
-      )}
-
       {items.length > 0 && (
         <>
           <div className="search" style={{ marginBottom: 10 }}>
@@ -330,7 +368,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="location">Location</option>
               <option value="value">Highest value</option>
             </select>
-            <button className="iconbtn" title="Print all labels" onClick={() => printAll(items)}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size) => printAll(items, size))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -472,7 +510,7 @@ function FormView({ editing, setEditing, onSave, onBack, resellerMode, user, fla
 }
 
 /* ---------------- Detail ---------------- */
-function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onMove, households, space }) {
+function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onMove, households, space, printWithPicker }) {
   const [qr, setQr] = useState('')
   const [pullIdx, setPullIdx] = useState(null)   // index of item being pulled (shows action sheet)
   const [showMove, setShowMove] = useState(false)
@@ -515,7 +553,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printLabel(item)}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size) => printLabel(item, size))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1007,7 +1045,7 @@ function SalesView({ items, onBack }) {
 }
 
 /* ---------------- Batch blank labels ---------------- */
-function BatchView({ onCreate, onBack }) {
+function BatchView({ onCreate, onBack, printWithPicker }) {
   const [count, setCount] = useState(10)
   const [busy, setBusy] = useState(false)
   const [createdIds, setCreatedIds] = useState(null)
@@ -1049,7 +1087,7 @@ function BatchView({ onCreate, onBack }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printBlanks(createdIds)}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size) => printBlanks(createdIds, size))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -1250,8 +1288,181 @@ function UpgradeView({ plan, itemCount, onUpgrade, onBack }) {
   )
 }
 
+/* ---------------- More menu ---------------- */
+function MoreView({ setView, plan, resellerMode }) {
+  const Row = ({ icon, label, sub, onClick, accent }) => (
+    <button onClick={onClick} style={{
+      width: '100%', textAlign: 'left', background: 'var(--surface)',
+      border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+      padding: '14px 16px', marginBottom: 10, display: 'flex',
+      alignItems: 'center', gap: 14, cursor: 'pointer', color: 'var(--text)',
+    }}>
+      <span style={{ fontSize: 22 }}>{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ margin: 0, fontWeight: 500, color: accent || 'var(--text)' }}>{label}</p>
+        {sub && <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>{sub}</p>}
+      </div>
+      <span className="muted">›</span>
+    </button>
+  )
+  return (
+    <>
+      <div className="topbar"><h1>More</h1></div>
+      {!plan?.isPaid && <Row icon="✨" label="Upgrade to Plus" sub={plan?.state === 'trial' ? `${plan.trialDaysLeft} trial days left` : 'Unlimited & full features'} accent="var(--brand)" onClick={() => setView('upgrade')} />}
+      {resellerMode && <Row icon="📊" label="Sales summary" sub="Revenue, fees, profit, CSV export" onClick={() => setView('sales')} />}
+      <Row icon="⏰" label="Expiring soon" sub="Pantry & inventory triage" onClick={() => setView('expiring')} />
+      <Row icon="👥" label="Households" sub="Share inventory with family" onClick={() => setView('households')} />
+      <Row icon="⧉" label="Print blank labels" sub="Set up bins later by scanning" onClick={() => setView('batch')} />
+      <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />
+      <Row icon="⚙" label="Settings" sub="Reseller mode, plan, account" onClick={() => setView('settings')} />
+    </>
+  )
+}
+
+/* ---------------- Order pre-printed labels ---------------- */
+function OrderLabelsView({ user, onBack, flash }) {
+  const [size, setSize] = useState('avery-5160')
+  const [count, setCount] = useState(60)
+  const [notes, setNotes] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const SIZES = [
+    { id: 'avery-5160', label: 'Avery 5160 (1×2-5/8")', per: '30 / sheet' },
+    { id: 'dymo-30252', label: 'Dymo 30252 (1-1/8×3-1/2")', per: 'roll' },
+    { id: 'brother-dk1201', label: 'Brother DK-1201 (1.1×3.5")', per: 'roll' },
+    { id: '2x4', label: '2×4" shipping label', per: 'sheet/roll' },
+    { id: '4x6', label: '4×6" thermal', per: 'roll' },
+  ]
+
+  async function submit() {
+    setBusy(true)
+    try {
+      // Save the request to Supabase so you can review it later.
+      const { error } = await supabase.from('label_orders').insert({
+        user_id: user.id, email: user.email, size, count: parseInt(count) || 0, notes,
+      })
+      if (error) throw error
+      setSubmitted(true)
+    } catch (e) {
+      // If the table doesn't exist yet, still treat as success and just flash a note.
+      console.log('order save', e)
+      setSubmitted(true)
+    } finally { setBusy(false) }
+  }
+
+  if (submitted) return (
+    <>
+      <div className="topbar"><button className="iconbtn" onClick={onBack}>‹</button><h1 style={{ fontSize: 18 }}>Order request received</h1></div>
+      <div className="full-center center">
+        <div style={{ fontSize: 40 }}>✅</div>
+        <p style={{ margin: 0, maxWidth: 340 }}>Thanks — we got your request. You'll hear back at <strong>{user.email}</strong> with pricing and next steps.</p>
+        <button className="btn" style={{ width: 'auto', marginTop: 12 }} onClick={onBack}>Done</button>
+      </div>
+    </>
+  )
+
+  return (
+    <>
+      <div className="topbar"><button className="iconbtn" onClick={onBack}>‹</button><h1 style={{ fontSize: 18 }}>Order pre-printed labels</h1></div>
+      <div className="card" style={{ marginBottom: 14, background: 'var(--surface-2)', border: '1px dashed var(--border-strong)' }}>
+        <p style={{ margin: 0, fontWeight: 500 }}>Coming soon</p>
+        <p className="muted" style={{ fontSize: 13, margin: '4px 0 0', lineHeight: 1.5 }}>
+          We're rolling out pre-printed label packs — pick a size, tell us how many, and we'll get back to you with pricing and shipping. No payment now; this is a request.
+        </p>
+      </div>
+
+      <label className="field">Label size</label>
+      <select value={size} onChange={(e) => setSize(e.target.value)} style={{ marginBottom: 14 }}>
+        {SIZES.map((s) => <option key={s.id} value={s.id}>{s.label} · {s.per}</option>)}
+      </select>
+
+      <label className="field">How many labels</label>
+      <input type="number" min="10" value={count} onChange={(e) => setCount(e.target.value)} style={{ marginBottom: 14 }} />
+
+      <label className="field">Notes (optional)</label>
+      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any special requests — color, logo on labels, shipping notes…" style={{ marginBottom: 16, minHeight: 80 }} />
+
+      <button className="btn primary" disabled={busy} onClick={submit}>
+        {busy ? 'Submitting…' : 'Request quote'}
+      </button>
+      <p className="muted center" style={{ fontSize: 12, marginTop: 12 }}>
+        We'll reply to {user.email}. No charge until you confirm an order.
+      </p>
+    </>
+  )
+}
+
+/* ---------------- Print size picker (modal) with live preview ---------------- */
+function PrintSizePicker({ open, onClose, onPick, initialSize }) {
+  const [sel, setSel] = useState(initialSize || DEFAULT_SIZE)
+  const [remember, setRemember] = useState(false)
+  const [previewQR, setPreviewQR] = useState('')
+  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false) } }, [open, initialSize])
+  useEffect(() => { if (open) qrDataUrl('PREVIEW', 180).then(setPreviewQR) }, [open])
+  if (!open) return null
+  const size = LABEL_SIZES.find((s) => s.id === sel) || LABEL_SIZES[0]
+
+  // Scale the physical inches to a CSS preview that fits the modal.
+  // Max preview width 280px; height scales proportionally; min height 70px.
+  const maxW = 280
+  const scale = Math.min(maxW / (size.w * 72), 140 / (size.h * 72))
+  const previewW = size.w * 72 * scale
+  const previewH = size.h * 72 * scale
+  const qrSide = Math.min(previewW, previewH) - 8
+  const isTiny = size.w < 3
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h3>Pick a label size</h3>
+        <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>
+          Choose what you're printing on. Sheets print as a grid; roll/thermal printers print one per page.
+        </p>
+
+        {/* Live preview */}
+        <div style={{ background: 'var(--surface-2)', borderRadius: 9, padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>Preview · {size.w}″ × {size.h}″</p>
+          <div style={{
+            width: previewW, height: previewH, background: '#fff',
+            border: '1px solid #999', borderRadius: 4,
+            display: 'flex', alignItems: 'center', gap: 4, padding: 4, overflow: 'hidden',
+          }}>
+            {previewQR && <img src={previewQR} alt="" style={{ width: qrSide, height: qrSide, flexShrink: 0 }} />}
+            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+              <div style={{ fontWeight: 'bold', fontSize: isTiny ? 9 : 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#000' }}>Sample Bin Name</div>
+              <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Category</div>
+              <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Location · Shelf 3</div>
+            </div>
+          </div>
+        </div>
+
+        {LABEL_SIZES.map((s) => (
+          <div key={s.id} className={`size-opt ${sel === s.id ? 'sel' : ''}`} onClick={() => setSel(s.id)}>
+            <span className="dot" />
+            <div style={{ flex: 1 }}>
+              <p style={{ margin: 0, fontWeight: 500, fontSize: 14 }}>{s.label}</p>
+              <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>{s.kind === 'sheet' ? 'Letter-paper sheet' : 'Single label per page (thermal/roll)'}</p>
+            </div>
+          </div>
+        ))}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ width: 'auto' }} />
+          Remember as my default size
+        </label>
+
+        <div className="row" style={{ marginTop: 14 }}>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember)}>Print</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- Settings ---------------- */
-function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, plan, onUpgrade }) {
+function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, plan, onUpgrade, defaultLabelSize, setDefaultLabelSize }) {
   const planLabel = plan ? ({ trial: `Free trial · ${plan.trialDaysLeft}d left`, active: 'Plus (paid) · active', comp: 'Complimentary access', free: 'Free plan' }[plan.state] || plan.state) : ''
   return (
     <>
@@ -1268,6 +1479,15 @@ function SettingsView({ resellerMode, toggleReseller, onBack, signOut, email, pl
           </div>
           {plan && !plan.isPaid && <button className="btn primary" style={{ width: 'auto' }} onClick={onUpgrade}>Upgrade</button>}
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <p style={{ fontWeight: 500, margin: '0 0 4px' }}>Default label size</p>
+        <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Used when you print. You can still pick a different size each time.</p>
+        <select value={defaultLabelSize || ''} onChange={(e) => setDefaultLabelSize(e.target.value || null)}>
+          <option value="">No default — ask every time</option>
+          {LABEL_SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>

@@ -39,6 +39,7 @@ alter table public.settings add column if not exists active_household uuid;
 alter table public.settings add column if not exists plan text not null default 'trial';
 alter table public.settings add column if not exists trial_ends timestamptz;
 alter table public.settings add column if not exists created_at timestamptz not null default now();
+alter table public.settings add column if not exists default_label_size text;
 
 -- ----- Households -----
 create table if not exists public.households (
@@ -255,3 +256,27 @@ create policy "public photo reads" on storage.objects
 --
 -- To revoke and put them back on the normal flow, set plan = 'free' (or 'trial').
 -- ============================================================
+
+-- ============================================================
+-- Pre-printed label order requests
+-- ============================================================
+create table if not exists public.label_orders (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  email       text,
+  size        text not null,
+  count       integer not null default 0,
+  notes       text,
+  status      text not null default 'requested',  -- requested | quoted | shipped | cancelled
+  created_at  timestamptz not null default now()
+);
+
+alter table public.label_orders enable row level security;
+
+drop policy if exists "view own orders" on public.label_orders;
+create policy "view own orders" on public.label_orders
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "create own orders" on public.label_orders;
+create policy "create own orders" on public.label_orders
+  for insert with check (auth.uid() = user_id);
