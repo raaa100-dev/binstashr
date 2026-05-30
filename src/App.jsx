@@ -187,6 +187,29 @@ function Main({ user }) {
     } catch (e) { flash('Could not update'); return null }
   }
 
+  // Take a lent item from history and put it back in the container's contents.
+  async function returnLentItem(container, historyIndex) {
+    const history = [...(container.history || [])]
+    const entry = history[historyIndex]
+    if (!entry || entry.reason !== 'lent') return
+    // Strip the pull metadata; keep just the item fields.
+    const { pulledAt, reason, lentTo, lentDate, dueDate, ...item } = entry
+    history.splice(historyIndex, 1)
+    const contents = [...(container.contents || []), item]
+    const updated = { ...container, contents, history }
+    try {
+      await upsertContainer(user.id, updated, space)
+      setItems((prev) => {
+        const idx = prev.findIndex((i) => i.id === updated.id)
+        if (idx >= 0) { const c = [...prev]; c[idx] = updated; return c }
+        return prev
+      })
+      setEditing(updated)
+      flash(`“${item.name || 'Item'}” returned to bin`)
+      return updated
+    } catch (e) { flash('Could not update'); return null }
+  }
+
   async function batchCreate(count) {
     if (!plan.fullAccess && items.length + count > FREE_CONTAINER_LIMIT) {
       setView('upgrade'); return null
@@ -353,7 +376,7 @@ function Main({ user }) {
     { key: 'list', label: 'Bins', icon: '📦', go: () => { goList() } },
     { key: 'scan', label: 'Scan', icon: '▢', go: () => setView('scan') },
     { key: 'add', label: 'Add', icon: '＋', go: () => newItem(), center: true },
-    { key: 'sales', label: resellerMode ? 'Sales' : 'Expiring', icon: resellerMode ? '📊' : '⏰',
+    { key: 'sales', label: resellerMode ? 'Sales' : 'Activity', icon: resellerMode ? '📊' : '⏰',
       go: () => setView(resellerMode ? 'sales' : 'expiring') },
     { key: 'more', label: 'More', icon: '☰', go: () => setView('more') },
   ]
@@ -371,7 +394,7 @@ function Main({ user }) {
     <div className="app">
       {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker, bulkMove, bulkDelete }} />}
       {view === 'form' && <FormView {...common} editing={editing} setEditing={setEditing} onSave={saveItem} onBack={() => (items.find((i) => i.id === editing.id) ? setView('detail') : goList())} />}
-      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} maps={maps} onStartPinPick={(mapId) => { setActiveMapId(mapId); setPinPickFor(editing); setView('mappick') }} onUnpin={() => unpinBin(editing.id)} onViewMap={(mapId) => { setActiveMapId(mapId); setView('mapview') }} />}
+      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onReturn={returnLentItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} maps={maps} onStartPinPick={(mapId) => { setActiveMapId(mapId); setPinPickFor(editing); setView('mappick') }} onUnpin={() => unpinBin(editing.id)} onViewMap={(mapId) => { setActiveMapId(mapId); setView('mapview') }} />}
       {view === 'scan' && <ScanView items={items} resellerMode={resellerMode} onFound={openDetail} onBack={goList} flash={flash} onQuickAdd={quickAddItem} />}
       {view === 'quickadd' && <QuickAddView container={editing} resellerMode={resellerMode} onAdd={quickAddItem} onDone={() => setView('detail')} onBack={() => setView('detail')} />}
       {view === 'batch' && <BatchView onCreate={batchCreate} onBack={() => setView('more')} printWithPicker={printWithPicker} />}
@@ -726,7 +749,7 @@ function FormView({ editing, setEditing, onSave, onBack, resellerMode, user, fla
 }
 
 /* ---------------- Detail ---------------- */
-function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onMove, households, space, printWithPicker, maps, onStartPinPick, onUnpin, onViewMap }) {
+function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onReturn, onMove, households, space, printWithPicker, maps, onStartPinPick, onUnpin, onViewMap }) {
   const [qr, setQr] = useState('')
   const [pullIdx, setPullIdx] = useState(null)   // index of item being pulled (shows action sheet)
   const [showMove, setShowMove] = useState(false)
@@ -736,6 +759,9 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
   const [fees, setFees] = useState({ sellerFee: '', ccFee: '', shipping: '', packing: '' })
   const [showFees, setShowFees] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [lendIdx, setLendIdx] = useState(null)
+  const [lendTo, setLendTo] = useState('')
+  const [lendDue, setLendDue] = useState('')
   useEffect(() => { qrDataUrl(item.id).then(setQr) }, [item.id])
   const cv = containerValue(item)
   const profit = containerProfit(item)
@@ -744,6 +770,18 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
   function resetSell() {
     setSellIdx(null); setSellPrice(''); setSellCost(''); setPullIdx(null)
     setFees({ sellerFee: '', ccFee: '', shipping: '', packing: '' }); setShowFees(false)
+  }
+  function resetLend() {
+    setLendIdx(null); setLendTo(''); setLendDue(''); setPullIdx(null)
+  }
+  function confirmLend(i, c) {
+    if (!lendTo.trim()) return
+    onPull(item, i, 'lent', {
+      lentTo: lendTo.trim(),
+      lentDate: new Date().toISOString().slice(0, 10),
+      dueDate: lendDue || null,
+    })
+    resetLend()
   }
   function confirmSell(i, c) {
     const sale = sellPrice === '' ? c.sale : sellPrice
@@ -917,6 +955,18 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
                       <button className="btn ghost" onClick={resetSell}>Cancel</button>
                     </div>
                   </>
+                ) : lendIdx === i ? (
+                  <>
+                    <p className="muted" style={{ fontSize: 13, margin: '0 0 8px' }}>Lend out “{c.name}”</p>
+                    <label className="field">Lent to</label>
+                    <input autoFocus value={lendTo} onChange={(e) => setLendTo(e.target.value)} placeholder="Who's borrowing it?" style={{ marginBottom: 10 }} />
+                    <label className="field">Due back (optional)</label>
+                    <input type="date" value={lendDue} onChange={(e) => setLendDue(e.target.value)} style={{ marginBottom: 10 }} />
+                    <div className="row">
+                      <button className="btn primary" disabled={!lendTo.trim()} onClick={() => confirmLend(i, c)}>Confirm lend</button>
+                      <button className="btn ghost" onClick={resetLend}>Cancel</button>
+                    </div>
+                  </>
                 ) : (
                   <>
                     <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Pull “{c.name}” out — what happened to it?</p>
@@ -924,10 +974,11 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
                       <button className="btn" onClick={() => { onPull(item, i, 'used'); setPullIdx(null) }}>Used</button>
                       <button className="btn" onClick={() => { setSellIdx(i); setSellPrice(c.sale ?? ''); setSellCost(c.cost ?? '') }}>Sold</button>
                     </div>
-                    <div className="row">
+                    <div className="row" style={{ marginBottom: 8 }}>
+                      <button className="btn" onClick={() => setLendIdx(i)}>📤 Lend out</button>
                       <button className="btn danger" onClick={() => { onPull(item, i, 'remove'); setPullIdx(null) }}>Remove</button>
-                      <button className="btn ghost" onClick={() => setPullIdx(null)}>Cancel</button>
                     </div>
+                    <button className="btn ghost" onClick={() => setPullIdx(null)}>Cancel</button>
                   </>
                 )}
               </div>
@@ -936,18 +987,54 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
         )})}
       </div>
 
+      {(() => {
+        const lentEntries = (item.history || []).map((h, i) => ({ h, i })).filter(({ h }) => h.reason === 'lent')
+        if (lentEntries.length === 0) return null
+        return (
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ fontWeight: 500, margin: '0 0 8px', fontSize: 14 }}>📤 Currently lent out ({lentEntries.length})</p>
+            {lentEntries.map(({ h, i }) => {
+              const overdue = h.dueDate && new Date(h.dueDate) < new Date(new Date().toDateString())
+              return (
+                <div key={i} className="card" style={{ marginBottom: 8, padding: 12, borderColor: overdue ? 'var(--danger)' : 'var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ margin: 0, fontWeight: 500, fontSize: 14 }}>{h.name}{h.qty > 1 ? ` ×${h.qty}` : ''}</p>
+                      <p className="muted" style={{ fontSize: 12, margin: '3px 0 0' }}>
+                        Lent to <strong>{h.lentTo || 'someone'}</strong>
+                        {h.lentDate && ` on ${new Date(h.lentDate).toLocaleDateString()}`}
+                      </p>
+                      {h.dueDate && (
+                        <p style={{ fontSize: 12, margin: '3px 0 0', color: overdue ? 'var(--danger)' : 'var(--text-2)' }}>
+                          {overdue ? '⏰ Overdue — due ' : 'Due back '}{new Date(h.dueDate).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <button className="btn" style={{ width: 'auto', flexShrink: 0 }} onClick={() => onReturn && onReturn(item, i)}>↩ Returned</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
+
       {(item.history && item.history.length > 0) && (
         <div style={{ marginBottom: 22 }}>
           <button className="btn ghost" onClick={() => setShowHistory(!showHistory)} style={{ justifyContent: 'space-between' }}>
-            <span>Pulled / used / sold ({item.history.length})</span>
+            <span>History ({item.history.length})</span>
             <span className="muted">{showHistory ? '▲' : '▼'}</span>
           </button>
           {showHistory && (
             <div style={{ marginTop: 8 }}>
               {item.history.map((h, i) => (
                 <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ flex: 1, fontSize: 14 }}>{h.name}{h.qty > 1 ? ` ×${h.qty}` : ''}{h.reason === 'sold' && h.sale ? ` · ${money(h.sale)}` : ''}</span>
-                  <span className={`pill ${h.reason === 'sold' ? 'sold' : 'used'}`}>{h.reason}</span>
+                  <span style={{ flex: 1, fontSize: 14 }}>
+                    {h.name}{h.qty > 1 ? ` ×${h.qty}` : ''}
+                    {h.reason === 'sold' && h.sale ? ` · ${money(h.sale)}` : ''}
+                    {h.reason === 'lent' && h.lentTo ? ` · ${h.lentTo}` : ''}
+                  </span>
+                  <span className={`pill ${h.reason === 'sold' ? 'sold' : h.reason === 'lent' ? 'stock' : 'used'}`}>{h.reason}</span>
                   <span className="muted" style={{ fontSize: 12 }}>{h.pulledAt ? new Date(h.pulledAt).toLocaleDateString() : ''}</span>
                 </div>
               ))}
@@ -1153,6 +1240,31 @@ function ExpiringView({ items, resellerMode, onOpen, onPull, onBack }) {
   const expired = list.filter((x) => x.status === 'expired')
   const soon = list.filter((x) => x.status === 'soon')
 
+  // Collect every currently-lent item across all bins.
+  const lent = []
+  for (const it of items) {
+    for (let h = 0; h < (it.history || []).length; h++) {
+      const e = it.history[h]
+      if (e.reason === 'lent') {
+        lent.push({
+          containerId: it.id, containerName: it.name || 'Untitled',
+          location: it.location || '', historyIndex: h,
+          name: e.name || '(item)', qty: e.qty || 1,
+          lentTo: e.lentTo, lentDate: e.lentDate, dueDate: e.dueDate,
+          overdue: e.dueDate && new Date(e.dueDate) < new Date(new Date().toDateString()),
+        })
+      }
+    }
+  }
+  // Sort: overdue first, then by due date ascending (no due date last), then by lentDate descending.
+  lent.sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
+    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate)
+    if (a.dueDate) return -1
+    if (b.dueDate) return 1
+    return (b.lentDate || '').localeCompare(a.lentDate || '')
+  })
+
   function pullByRef(ref, mode) {
     const container = items.find((i) => i.id === ref.containerId)
     if (!container) return
@@ -1182,12 +1294,15 @@ function ExpiringView({ items, resellerMode, onOpen, onPull, onBack }) {
     )
   )
 
+  const nothing = !list.length && !lent.length
+
   return (
     <>
       <div className="topbar">
         <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
-        <h1 style={{ fontSize: 18 }}>Expiring soon</h1>
+        <h1 style={{ fontSize: 18 }}>Activity</h1>
       </div>
+      <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>Things expiring soon and items you've lent out — your weekly check-in.</p>
 
       <label className="field">Show items expiring within</label>
       <select value={days} onChange={(e) => setDays(parseInt(e.target.value))} style={{ marginBottom: 8 }}>
@@ -1196,17 +1311,45 @@ function ExpiringView({ items, resellerMode, onOpen, onPull, onBack }) {
         <option value={30}>30 days</option>
         <option value={60}>60 days</option>
         <option value={90}>90 days</option>
+        <option value={180}>180 days (6 months)</option>
+        <option value={365}>1 year</option>
+        <option value={3650}>All upcoming</option>
       </select>
 
-      {!list.length && (
+      {nothing && (
         <div className="full-center center muted">
           <div style={{ fontSize: 36 }}>✅</div>
-          <p>Nothing expired or expiring in this window.</p>
+          <p>Nothing expired, expiring, or lent out.</p>
         </div>
       )}
 
       <Section title="Expired" rows={expired} tone="var(--danger)" />
       <Section title="Expiring soon" rows={soon} tone="var(--warn-text)" />
+
+      {lent.length > 0 && (
+        <>
+          <p style={{ fontWeight: 500, fontSize: 14, margin: '20px 0 8px' }}>📤 Lent out ({lent.length})</p>
+          {lent.map((x, i) => (
+            <div key={i} className="card" style={{ marginBottom: 10, padding: '12px 14px', borderColor: x.overdue ? 'var(--danger)' : 'var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1, fontSize: 15 }}>{x.name}{x.qty > 1 ? ` ×${x.qty}` : ''}</span>
+                {x.overdue && <span className="pill expired">Overdue</span>}
+              </div>
+              <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
+                To <strong>{x.lentTo || 'someone'}</strong>
+                {x.lentDate && ` on ${new Date(x.lentDate).toLocaleDateString()}`}
+                {x.dueDate && ` · due ${new Date(x.dueDate).toLocaleDateString()}`}
+              </p>
+              <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>
+                from <strong>{x.containerName}</strong>{x.location ? ` · 📍 ${x.location}` : ''}
+              </p>
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="btn" onClick={() => onOpen(x.containerId)}>Open box</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </>
   )
 }
@@ -2031,7 +2174,7 @@ function MoreView({ setView, plan, resellerMode, user }) {
       <Row icon="👤" label="Profile" sub={user?.email} onClick={() => setView('profile')} />
       {!FREE_FOR_ALL && !plan?.isPaid && <Row icon="✨" label="Upgrade to Plus" sub={plan?.state === 'trial' ? `${plan.trialDaysLeft} trial days left` : 'Unlimited & full features'} accent="var(--brand)" onClick={() => setView('upgrade')} />}
       {resellerMode && <Row icon="📊" label="Sales summary" sub="Revenue, fees, profit, CSV export" onClick={() => setView('sales')} />}
-      <Row icon="⏰" label="Expiring soon" sub="Pantry & inventory triage" onClick={() => setView('expiring')} />
+      <Row icon="⏰" label="Activity" sub="Expiring items & lent-out tracking" onClick={() => setView('expiring')} />
       <Row icon="👥" label="Households" sub="Share inventory with family" onClick={() => setView('households')} />
       <Row icon="⧉" label="Print blank labels" sub="Set up bins later by scanning" onClick={() => setView('batch')} />
       <Row icon="📥" label="Import from CSV" sub="Bring in items from a spreadsheet" onClick={() => setView('import')} />
