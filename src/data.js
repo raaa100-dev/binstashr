@@ -67,6 +67,9 @@ function rowToItem(r) {
     photos: r.photos || [],
     contents: r.contents || [],
     history: r.history || [],
+    mapId: r.map_id || null,
+    pinX: r.pin_x !== null && r.pin_x !== undefined ? r.pin_x : null,
+    pinY: r.pin_y !== null && r.pin_y !== undefined ? r.pin_y : null,
     created: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
   }
 }
@@ -181,6 +184,63 @@ export async function deleteHousehold(householdId) {
 export async function inviteByEmail(householdId, userId, email) {
   const { error } = await supabase
     .from('household_invites').insert({ household_id: householdId, email: email.trim().toLowerCase(), invited_by: userId })
+  if (error) throw error
+}
+
+// ---- Maps / floor plans ----
+export async function fetchMaps(userId, space) {
+  let q = supabase.from('maps').select('*').order('created_at', { ascending: false })
+  if (space) q = q.eq('household_id', space)
+  else q = q.is('household_id', null).eq('user_id', userId)
+  const { data, error } = await q
+  if (error) throw error
+  return (data || []).map((m) => ({
+    id: m.id, name: m.name, imageUrl: m.image_url,
+    width: m.width || 1000, height: m.height || 800,
+    householdId: m.household_id || null, userId: m.user_id,
+  }))
+}
+
+export async function uploadMapImage(userId, blob, ext = 'png') {
+  const path = `${userId}/map-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+  const { error } = await supabase.storage.from('maps').upload(path, blob, {
+    contentType: ext === 'svg' ? 'image/svg+xml' : (ext === 'jpg' ? 'image/jpeg' : 'image/png'),
+    upsert: false,
+  })
+  if (error) throw error
+  const { data } = supabase.storage.from('maps').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export async function createMap(userId, { name, imageUrl, width, height, householdId }) {
+  const { data, error } = await supabase
+    .from('maps')
+    .insert({ user_id: userId, household_id: householdId || null, name: name || 'Map', image_url: imageUrl, width, height })
+    .select().single()
+  if (error) throw error
+  return { id: data.id, name: data.name, imageUrl: data.image_url, width: data.width, height: data.height, householdId: data.household_id }
+}
+
+export async function deleteMap(mapId) {
+  // Clear any container pins that reference it, then delete.
+  await supabase.from('containers').update({ map_id: null, pin_x: null, pin_y: null }).eq('map_id', mapId)
+  const { error } = await supabase.from('maps').delete().eq('id', mapId)
+  if (error) throw error
+}
+
+export async function setContainerPin(containerId, mapId, x, y) {
+  const { error } = await supabase
+    .from('containers')
+    .update({ map_id: mapId, pin_x: x, pin_y: y })
+    .eq('id', containerId)
+  if (error) throw error
+}
+
+export async function clearContainerPin(containerId) {
+  const { error } = await supabase
+    .from('containers')
+    .update({ map_id: null, pin_x: null, pin_y: null })
+    .eq('id', containerId)
   if (error) throw error
 }
 

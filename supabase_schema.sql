@@ -282,3 +282,73 @@ create policy "view own orders" on public.label_orders
 drop policy if exists "create own orders" on public.label_orders;
 create policy "create own orders" on public.label_orders
   for insert with check (auth.uid() = user_id);
+
+-- ============================================================
+-- Floor plans / maps with pin-dropped container locations
+-- ============================================================
+create table if not exists public.maps (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users (id) on delete cascade,
+  household_id uuid,
+  name         text not null default 'Map',
+  image_url    text not null,          -- public URL to the map image (svg/png/jpg)
+  width        integer,                -- original pixel width (for coordinate math)
+  height       integer,                -- original pixel height
+  created_at   timestamptz not null default now()
+);
+
+alter table public.containers add column if not exists map_id uuid;
+alter table public.containers add column if not exists pin_x real;   -- 0.0–1.0 fraction of width
+alter table public.containers add column if not exists pin_y real;   -- 0.0–1.0 fraction of height
+
+alter table public.maps enable row level security;
+
+-- Bucket for floor-plan images
+insert into storage.buckets (id, name, public)
+values ('maps', 'maps', true)
+on conflict (id) do nothing;
+
+drop policy if exists "own map uploads" on storage.objects;
+create policy "own map uploads" on storage.objects
+  for insert with check (
+    bucket_id = 'maps' and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+drop policy if exists "own map deletes" on storage.objects;
+create policy "own map deletes" on storage.objects
+  for delete using (
+    bucket_id = 'maps' and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+drop policy if exists "public map reads" on storage.objects;
+create policy "public map reads" on storage.objects
+  for select using (bucket_id = 'maps');
+
+-- Maps are visible if you own them OR they belong to a household you're in.
+drop policy if exists "view maps" on public.maps;
+create policy "view maps" on public.maps
+  for select using (
+    auth.uid() = user_id
+    or (household_id is not null and public.is_household_member(household_id))
+  );
+
+drop policy if exists "insert maps" on public.maps;
+create policy "insert maps" on public.maps
+  for insert with check (
+    auth.uid() = user_id
+    and (household_id is null or public.is_household_member(household_id))
+  );
+
+drop policy if exists "update maps" on public.maps;
+create policy "update maps" on public.maps
+  for update using (
+    auth.uid() = user_id
+    or (household_id is not null and public.is_household_member(household_id))
+  );
+
+drop policy if exists "delete maps" on public.maps;
+create policy "delete maps" on public.maps
+  for delete using (
+    auth.uid() = user_id
+    or (household_id is not null and public.is_household_owner(household_id))
+  );

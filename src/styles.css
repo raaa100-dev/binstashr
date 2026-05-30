@@ -147,6 +147,47 @@ label.field { font-size: 13px; color: var(--text-2); display: block; margin-bott
 .size-opt .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-strong); flex-shrink: 0; }
 .size-opt.sel .dot { border-color: var(--brand); background: var(--brand); box-shadow: inset 0 0 0 3px #fff; }
 
+/* ---- Map viewer ---- */
+.map-stage {
+  position: relative;
+  width: 100%;
+  background: #fafafa;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  touch-action: none;          /* we'll handle pinch/pan ourselves */
+  user-select: none;
+  height: 60vh;
+  min-height: 360px;
+}
+.map-stage .layer {
+  position: absolute; top: 0; left: 0;
+  transform-origin: 0 0;
+}
+.map-stage img.bg { display: block; max-width: none; }
+.map-stage .pin {
+  position: absolute;
+  width: 28px; height: 28px;
+  margin-left: -14px; margin-top: -28px;
+  display: flex; align-items: flex-start; justify-content: center;
+  cursor: pointer; pointer-events: auto;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35));
+}
+.map-stage .pin svg { width: 28px; height: 28px; }
+.map-stage .pin.placing { animation: pin-pulse 1.2s ease-in-out infinite; }
+@keyframes pin-pulse { 50% { transform: scale(1.15); } }
+.map-controls {
+  position: absolute; right: 8px; bottom: 8px;
+  display: flex; flex-direction: column; gap: 6px; z-index: 5;
+}
+.map-controls button {
+  width: 36px; height: 36px; border-radius: 9px;
+  background: var(--surface); border: 1px solid var(--border);
+  font-size: 18px; font-weight: 600; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+
 .auth-logo { width: 64px; height: 64px; border-radius: 16px; background: var(--brand); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 18px; }
 
 .toggle { width: 52px; height: 30px; border-radius: 999px; position: relative; border: 1px solid var(--border-strong); background: var(--surface-2); flex-shrink: 0; padding: 0; }

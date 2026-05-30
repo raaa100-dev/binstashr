@@ -7,6 +7,7 @@ import {
   createBlankContainers,
   fetchHouseholds, createHousehold, joinHouseholdByCode,
   fetchMembers, leaveHousehold, removeMember, setMemberRole, deleteHousehold, inviteByEmail,
+  fetchMaps, uploadMapImage, createMap, deleteMap, setContainerPin, clearContainerPin,
 } from './data'
 import {
   STATUSES, uid, num, money, containerValue, containerProfit,
@@ -17,6 +18,8 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { FREE_FOR_ALL, SHOW_ORDER_LABELS, TERMS_VERSION, COMPANY_NAME, SUPPORT_EMAIL } from './config'
 import { TermsText, PrivacyText } from './LegalText'
 import { HelpText } from './HelpText'
+import MapView from './MapView.jsx'
+import { processMapFile } from './maps'
 
 const MAX_PHOTOS = 2
 
@@ -42,11 +45,14 @@ function Main({ user }) {
   const [resellerMode, setResellerMode] = useState(false)
   const [households, setHouseholds] = useState([])
   const [space, setSpace] = useState(null)        // null = personal; else household id
+  const [maps, setMaps] = useState([])
   const [plan, setPlan] = useState({ state: 'trial', trialDaysLeft: 14, isPaid: false, fullAccess: true })
   const [defaultLabelSize, setDefaultLabelSize] = useState(null)
   const [termsVersion, setTermsVersion] = useState(0)
   const [loading, setLoading] = useState(true)
   const [printPicker, setPrintPicker] = useState(null)   // null or { onPick: fn }
+  const [activeMapId, setActiveMapId] = useState(null)
+  const [pinPickFor, setPinPickFor] = useState(null)     // container being pinned
   const [view, setView] = useState('list')
   const [editing, setEditing] = useState(null)
   const [query, setQuery] = useState('')
@@ -67,8 +73,8 @@ function Main({ user }) {
         setTermsVersion(s.termsVersion || 0)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
         setSpace(validSpace)
-        const list = await fetchContainers(user.id, validSpace)
-        setItems(list)
+        const [list, ms] = await Promise.all([fetchContainers(user.id, validSpace), fetchMaps(user.id, validSpace)])
+        setItems(list); setMaps(ms)
       } catch (e) { flash('Could not load data') }
       finally { setLoading(false) }
     })()
@@ -81,8 +87,8 @@ function Main({ user }) {
     (async () => {
       setLoading(true)
       try {
-        const list = await fetchContainers(user.id, space)
-        setItems(list)
+        const [list, ms] = await Promise.all([fetchContainers(user.id, space), fetchMaps(user.id, space)])
+        setItems(list); setMaps(ms)
         await saveSettings(user.id, { activeHousehold: space })
       } catch (e) { flash('Could not switch space') }
       finally { setLoading(false) }
@@ -222,6 +228,45 @@ function Main({ user }) {
     } catch (e) { flash('Could not save agreement') }
   }
 
+  async function uploadAndCreateMap(file, name) {
+    try {
+      const { blob, ext, width, height } = await processMapFile(file)
+      const url = await uploadMapImage(user.id, blob, ext)
+      const m = await createMap(user.id, { name: name || file.name.replace(/\.[^.]+$/, '') || 'Map', imageUrl: url, width, height, householdId: space })
+      setMaps((prev) => [m, ...prev])
+      flash('Map added')
+      return m
+    } catch (e) { console.log(e); flash(e.message || 'Could not upload map'); return null }
+  }
+
+  async function removeMap(mapId) {
+    if (!confirm('Delete this map? Any pins on it will be cleared from their bins.')) return
+    try {
+      await deleteMap(mapId)
+      setMaps((prev) => prev.filter((m) => m.id !== mapId))
+      setItems((prev) => prev.map((it) => it.mapId === mapId ? { ...it, mapId: null, pinX: null, pinY: null } : it))
+      flash('Map deleted')
+    } catch (e) { flash('Could not delete') }
+  }
+
+  async function placeBinPin(containerId, mapId, x, y) {
+    try {
+      await setContainerPin(containerId, mapId, x, y)
+      setItems((prev) => prev.map((it) => it.id === containerId ? { ...it, mapId, pinX: x, pinY: y } : it))
+      if (editing && editing.id === containerId) setEditing({ ...editing, mapId, pinX: x, pinY: y })
+      flash('Pin placed')
+    } catch (e) { flash('Could not place pin') }
+  }
+
+  async function unpinBin(containerId) {
+    try {
+      await clearContainerPin(containerId)
+      setItems((prev) => prev.map((it) => it.id === containerId ? { ...it, mapId: null, pinX: null, pinY: null } : it))
+      if (editing && editing.id === containerId) setEditing({ ...editing, mapId: null, pinX: null, pinY: null })
+      flash('Pin removed')
+    } catch (e) { flash('Could not remove pin') }
+  }
+
   // Phase-one stand-in for Stripe: flips the account to paid. Stripe will call this later.
   async function simulateUpgrade() {
     try {
@@ -250,6 +295,7 @@ function Main({ user }) {
     sales: 'sales', expiring: 'sales',
     more: 'more', settings: 'more', households: 'more', batch: 'more', upgrade: 'more', orderlabels: 'more',
     profile: 'more', help: 'more', terms: 'more', privacy: 'more',
+    maps: 'more', mapview: 'more', mappick: 'list',
   })[view] || 'list'
 
   const common = { items, resellerMode, user, flash }
@@ -257,7 +303,7 @@ function Main({ user }) {
     <div className="app">
       {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker }} />}
       {view === 'form' && <FormView {...common} editing={editing} setEditing={setEditing} onSave={saveItem} onBack={() => (items.find((i) => i.id === editing.id) ? setView('detail') : goList())} />}
-      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} />}
+      {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} maps={maps} onStartPinPick={(mapId) => { setActiveMapId(mapId); setPinPickFor(editing); setView('mappick') }} onUnpin={() => unpinBin(editing.id)} onViewMap={(mapId) => { setActiveMapId(mapId); setView('mapview') }} />}
       {view === 'scan' && <ScanView items={items} resellerMode={resellerMode} onFound={openDetail} onBack={goList} flash={flash} onQuickAdd={quickAddItem} />}
       {view === 'quickadd' && <QuickAddView container={editing} resellerMode={resellerMode} onAdd={quickAddItem} onDone={() => setView('detail')} onBack={() => setView('detail')} />}
       {view === 'batch' && <BatchView onCreate={batchCreate} onBack={() => setView('more')} printWithPicker={printWithPicker} />}
@@ -271,6 +317,9 @@ function Main({ user }) {
       {view === 'help' && <HelpView onBack={() => setView('more')} />}
       {view === 'terms' && <LegalView title="Terms of Service" body={<TermsText />} onBack={() => setView('more')} />}
       {view === 'privacy' && <LegalView title="Privacy Policy" body={<PrivacyText />} onBack={() => setView('more')} />}
+      {view === 'maps' && <MapsListView maps={maps} items={items} onOpen={(id) => { setActiveMapId(id); setView('mapview') }} onUpload={uploadAndCreateMap} onDelete={removeMap} onBack={() => setView('more')} />}
+      {view === 'mapview' && <MapsViewerView map={maps.find((m) => m.id === activeMapId)} items={items} onOpenBin={(id) => { openDetail(id) }} onBack={() => setView('maps')} />}
+      {view === 'mappick' && <PinPickerView map={maps.find((m) => m.id === activeMapId)} container={pinPickFor} onPlace={(x, y) => { placeBinPin(pinPickFor.id, activeMapId, x, y); setPinPickFor(null); setView('detail') }} onBack={() => { setPinPickFor(null); setView('detail') }} />}
       {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} user={user} />}
       {toast && <div className="toast">{toast}</div>}
 
@@ -530,7 +579,7 @@ function FormView({ editing, setEditing, onSave, onBack, resellerMode, user, fla
 }
 
 /* ---------------- Detail ---------------- */
-function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onMove, households, space, printWithPicker }) {
+function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, onPull, onMove, households, space, printWithPicker, maps, onStartPinPick, onUnpin, onViewMap }) {
   const [qr, setQr] = useState('')
   const [pullIdx, setPullIdx] = useState(null)   // index of item being pulled (shows action sheet)
   const [showMove, setShowMove] = useState(false)
@@ -602,6 +651,34 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       {item.location && <div className="badge brand" style={{ marginBottom: 12 }}>📍 {item.location}</div>}
       {item.expires && <div style={{ marginBottom: 12 }}><span className={`pill ${cExp}`}>{expLabel(item.expires)}</span></div>}
       <p className="muted" style={{ margin: '0 0 12px' }}>{item.category || 'No category'}</p>
+
+      {/* Floor plan pin */}
+      {maps && maps.length > 0 && (
+        item.mapId && item.pinX !== null && item.pinY !== null && maps.find((m) => m.id === item.mapId)
+          ? (
+            <div className="card" style={{ marginBottom: 14, padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <span style={{ fontSize: 18 }}>🗺️</span>
+                <div style={{ flex: 1 }}>
+                  <p style={{ margin: 0, fontWeight: 500, fontSize: 14 }}>Pinned on {maps.find((m) => m.id === item.mapId).name}</p>
+                  <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>Tap to see the location on the floor plan</p>
+                </div>
+              </div>
+              <div className="row">
+                <button className="btn" onClick={() => onViewMap(item.mapId)}>View on map</button>
+                <button className="btn ghost" onClick={onUnpin}>Remove pin</button>
+              </div>
+            </div>
+          )
+          : (
+            <div className="card" style={{ marginBottom: 14, padding: 12 }}>
+              <p style={{ margin: '0 0 8px', fontSize: 14 }}>📍 Pin this bin on a floor plan</p>
+              {maps.map((m) => (
+                <button key={m.id} className="btn" style={{ marginBottom: 6 }} onClick={() => onStartPinPick(m.id)}>{m.name}</button>
+              ))}
+            </div>
+          )
+      )}
 
       {item.photos && item.photos.length > 0 && (
         <div className="row" style={{ marginBottom: 16 }}>
@@ -1414,6 +1491,123 @@ function TermsGate({ onAccept, onSignOut }) {
   )
 }
 
+/* ---------------- Floor plans / maps ---------------- */
+function MapsListView({ maps, items, onOpen, onUpload, onDelete, onBack }) {
+  const fileRef = useRef(null)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0]
+    if (!file) return
+    setBusy(true)
+    await onUpload(file, name.trim())
+    setName('')
+    if (fileRef.current) fileRef.current.value = ''
+    setBusy(false)
+  }
+
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>Floor plans & maps</h1>
+      </div>
+
+      <p className="muted" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
+        Upload a floor plan, blueprint, or photo of a map. Then drop pins to show where each bin lives.
+        Accepts SVG, PDF, PNG, and JPG.
+      </p>
+
+      <div className="card" style={{ marginBottom: 18 }}>
+        <p style={{ fontWeight: 500, margin: '0 0 8px' }}>Upload a new map</p>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Garage, Floor 1)" style={{ marginBottom: 10 }} />
+        <input ref={fileRef} type="file" accept=".svg,.pdf,.png,.jpg,.jpeg,image/*,application/pdf,image/svg+xml" onChange={onFile} disabled={busy} />
+        {busy && <p className="muted" style={{ fontSize: 13, margin: '8px 0 0' }}>Processing — large PDFs may take a few seconds…</p>}
+      </div>
+
+      {maps.length === 0 && (
+        <div className="full-center center muted">
+          <div style={{ fontSize: 36 }}>🗺️</div>
+          <p style={{ maxWidth: 320 }}>No maps yet. Upload a floor plan above and you can start pinning bins to specific spots.</p>
+        </div>
+      )}
+
+      {maps.map((m) => {
+        const pinCount = items.filter((it) => it.mapId === m.id).length
+        return (
+          <div key={m.id} className="listcard" onClick={() => onOpen(m.id)} style={{ cursor: 'pointer' }}>
+            <div style={{ width: 60, height: 46, borderRadius: 6, overflow: 'hidden', flexShrink: 0, background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)' }}>
+              <img src={m.imageUrl} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p className="ellip" style={{ fontWeight: 500, margin: 0 }}>{m.name}</p>
+              <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>{pinCount} pinned bin{pinCount === 1 ? '' : 's'}</p>
+            </div>
+            <button className="iconbtn" aria-label="Delete map" onClick={(e) => { e.stopPropagation(); onDelete(m.id) }} style={{ width: 32, height: 32, color: 'var(--danger)' }}>🗑</button>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+function MapsViewerView({ map, items, onOpenBin, onBack }) {
+  const [selected, setSelected] = useState(null)
+  if (!map) return (
+    <>
+      <div className="topbar"><button className="iconbtn" onClick={onBack}>‹</button><h1 style={{ fontSize: 18 }}>Map</h1></div>
+      <p className="muted center" style={{ padding: '2rem 0' }}>Map not found.</p>
+    </>
+  )
+  const pins = items
+    .filter((it) => it.mapId === map.id && it.pinX !== null && it.pinY !== null)
+    .map((it) => ({ id: it.id, name: it.name || 'Untitled', x: it.pinX, y: it.pinY }))
+  const selectedBin = selected ? items.find((it) => it.id === selected) : null
+
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>{map.name}</h1>
+      </div>
+      <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Pinch or scroll to zoom. Tap a pin to see what's there.</p>
+      <MapView map={map} pins={pins} onPinTap={(id) => setSelected(id)} />
+      {selectedBin && (
+        <div className="card" style={{ marginTop: 12, padding: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 22 }}>📦</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p className="ellip" style={{ fontWeight: 500, margin: 0 }}>{selectedBin.name || 'Untitled'}</p>
+              <p className="ellip muted" style={{ fontSize: 12, margin: '2px 0 0' }}>{selectedBin.contents?.length || 0} items{selectedBin.location ? ` · ${selectedBin.location}` : ''}</p>
+            </div>
+            <button className="btn" style={{ width: 'auto' }} onClick={() => onOpenBin(selectedBin.id)}>Open</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function PinPickerView({ map, container, onPlace, onBack }) {
+  if (!map || !container) return (
+    <>
+      <div className="topbar"><button className="iconbtn" onClick={onBack}>‹</button><h1 style={{ fontSize: 18 }}>Drop pin</h1></div>
+      <p className="muted center" style={{ padding: '2rem 0' }}>Map or bin not found.</p>
+    </>
+  )
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>Drop pin for “{container.name}”</h1>
+      </div>
+      <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Pinch or scroll to zoom into the map. Tap where you want to drop the pin.</p>
+      <MapView map={map} placingMode={true} onPlace={onPlace} />
+    </>
+  )
+}
+
 /* ---------------- More menu ---------------- */
 function MoreView({ setView, plan, resellerMode, user }) {
   const Row = ({ icon, label, sub, onClick, accent }) => (
@@ -1440,6 +1634,7 @@ function MoreView({ setView, plan, resellerMode, user }) {
       <Row icon="⏰" label="Expiring soon" sub="Pantry & inventory triage" onClick={() => setView('expiring')} />
       <Row icon="👥" label="Households" sub="Share inventory with family" onClick={() => setView('households')} />
       <Row icon="⧉" label="Print blank labels" sub="Set up bins later by scanning" onClick={() => setView('batch')} />
+      <Row icon="🗺️" label="Floor plans & maps" sub="Pin bins on a building plan" onClick={() => setView('maps')} />
       {SHOW_ORDER_LABELS && <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />}
       <Row icon="⚙" label="Settings" sub="Reseller mode, plan, account" onClick={() => setView('settings')} />
       <Row icon="❓" label="How to use BinStashR" sub="Quick guide to every feature" onClick={() => setView('help')} />
