@@ -4,10 +4,14 @@ export function uid() {
   return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+import { FREE_FOR_ALL } from './config'
+
 // Effective plan state, accounting for an expired trial.
 // Returns { state, trialDaysLeft, isPaid, fullAccess }
 // states: 'trial' | 'active' (paid) | 'comp' (free access granted by you) | 'free' (expired/limited)
 export function planState(plan, trialEnds) {
+  // Global free-for-all override: while true, treat every account as comp.
+  if (FREE_FOR_ALL) return { state: 'comp', trialDaysLeft: 0, isPaid: true, fullAccess: true }
   if (plan === 'comp') return { state: 'comp', trialDaysLeft: 0, isPaid: true, fullAccess: true }
   if (plan === 'active') return { state: 'active', trialDaysLeft: 0, isPaid: true, fullAccess: true }
   if (plan === 'trial' && trialEnds) {

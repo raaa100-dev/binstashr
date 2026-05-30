@@ -79,28 +79,32 @@ function openPrint(html) {
 }
 
 // Print one label for a single container, at the given size.
-export async function printLabel(item, sizeId = DEFAULT_SIZE) {
-  const lines = [item.name || 'Untitled']
-  if (item.category) lines.push(item.category)
-  if (item.location) lines.push(item.location)
+export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true) {
+  const lines = includeText ? [item.name || 'Untitled'] : []
+  if (includeText) {
+    if (item.category) lines.push(item.category)
+    if (item.location) lines.push(item.location)
+  }
   openPrint(await buildSheet([{ id: item.id, lines }], sizeId))
 }
 
 // Print labels for many containers, at the given size.
-export async function printAll(items, sizeId = DEFAULT_SIZE) {
+export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true) {
   if (!items.length) return
   const labels = items.map((it) => {
-    const lines = [it.name || 'Untitled']
-    if (it.category) lines.push(it.category)
-    if (it.location) lines.push(it.location)
+    const lines = includeText ? [it.name || 'Untitled'] : []
+    if (includeText) {
+      if (it.category) lines.push(it.category)
+      if (it.location) lines.push(it.location)
+    }
     return { id: it.id, lines }
   })
   openPrint(await buildSheet(labels, sizeId))
 }
 
 // Print blank labels (just QR + short human-readable code).
-export async function printBlanks(ids, sizeId = DEFAULT_SIZE) {
+export async function printBlanks(ids, sizeId = DEFAULT_SIZE, includeText = true) {
   if (!ids.length) return
-  const labels = ids.map((id) => ({ id, lines: [shortCode(id)] }))
+  const labels = ids.map((id) => ({ id, lines: includeText ? [shortCode(id)] : [] }))
   openPrint(await buildSheet(labels, sizeId))
 }

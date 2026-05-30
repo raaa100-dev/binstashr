@@ -14,6 +14,9 @@ import {
 } from './utils'
 import { qrDataUrl, printLabel, printAll, printBlanks, LABEL_SIZES, DEFAULT_SIZE } from './print'
 import { Html5Qrcode } from 'html5-qrcode'
+import { FREE_FOR_ALL, SHOW_ORDER_LABELS, TERMS_VERSION, COMPANY_NAME, SUPPORT_EMAIL } from './config'
+import { TermsText, PrivacyText } from './LegalText'
+import { HelpText } from './HelpText'
 
 const MAX_PHOTOS = 2
 
@@ -41,6 +44,7 @@ function Main({ user }) {
   const [space, setSpace] = useState(null)        // null = personal; else household id
   const [plan, setPlan] = useState({ state: 'trial', trialDaysLeft: 14, isPaid: false, fullAccess: true })
   const [defaultLabelSize, setDefaultLabelSize] = useState(null)
+  const [termsVersion, setTermsVersion] = useState(0)
   const [loading, setLoading] = useState(true)
   const [printPicker, setPrintPicker] = useState(null)   // null or { onPick: fn }
   const [view, setView] = useState('list')
@@ -60,6 +64,7 @@ function Main({ user }) {
         setHouseholds(hs)
         setPlan(planState(s.plan, s.trialEnds))
         setDefaultLabelSize(s.defaultLabelSize || null)
+        setTermsVersion(s.termsVersion || 0)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
         setSpace(validSpace)
         const list = await fetchContainers(user.id, validSpace)
@@ -210,6 +215,13 @@ function Main({ user }) {
     setPrintPicker({ onPick: (size) => fn(size) })
   }
 
+  async function acceptTerms() {
+    try {
+      await saveSettings(user.id, { termsVersion: TERMS_VERSION })
+      setTermsVersion(TERMS_VERSION)
+    } catch (e) { flash('Could not save agreement') }
+  }
+
   // Phase-one stand-in for Stripe: flips the account to paid. Stripe will call this later.
   async function simulateUpgrade() {
     try {
@@ -219,6 +231,9 @@ function Main({ user }) {
       goList()
     } catch (e) { flash('Could not upgrade') }
   }
+
+  // If the signed-in user hasn't agreed to the current terms version, show the gate.
+  if (termsVersion < TERMS_VERSION) return <TermsGate onAccept={acceptTerms} onSignOut={() => supabase.auth.signOut()} />
 
   // Bottom tab nav. Center "+" launches new container (or upgrade if at limit).
   const tabs = [
@@ -234,6 +249,7 @@ function Main({ user }) {
     scan: 'scan',
     sales: 'sales', expiring: 'sales',
     more: 'more', settings: 'more', households: 'more', batch: 'more', upgrade: 'more', orderlabels: 'more',
+    profile: 'more', help: 'more', terms: 'more', privacy: 'more',
   })[view] || 'list'
 
   const common = { items, resellerMode, user, flash }
@@ -251,19 +267,23 @@ function Main({ user }) {
       {view === 'upgrade' && <UpgradeView plan={plan} itemCount={items.length} onUpgrade={simulateUpgrade} onBack={() => setView('more')} />}
       {view === 'orderlabels' && <OrderLabelsView user={user} onBack={() => setView('more')} flash={flash} />}
       {view === 'settings' && <SettingsView resellerMode={resellerMode} toggleReseller={toggleReseller} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} email={user.email} plan={plan} onUpgrade={() => setView('upgrade')} defaultLabelSize={defaultLabelSize} setDefaultLabelSize={async (s) => { setDefaultLabelSize(s); try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {} }} />}
-      {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} />}
+      {view === 'profile' && <ProfileView user={user} plan={plan} itemCount={items.length} households={households} onBack={() => setView('more')} signOut={() => supabase.auth.signOut()} />}
+      {view === 'help' && <HelpView onBack={() => setView('more')} />}
+      {view === 'terms' && <LegalView title="Terms of Service" body={<TermsText />} onBack={() => setView('more')} />}
+      {view === 'privacy' && <LegalView title="Privacy Policy" body={<PrivacyText />} onBack={() => setView('more')} />}
+      {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} user={user} />}
       {toast && <div className="toast">{toast}</div>}
 
       <PrintSizePicker
         open={!!printPicker}
         onClose={() => setPrintPicker(null)}
         initialSize={defaultLabelSize || DEFAULT_SIZE}
-        onPick={async (s, remember) => {
+        onPick={async (s, remember, includeText) => {
           if (remember) {
             setDefaultLabelSize(s)
             try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {}
           }
-          printPicker && printPicker.onPick(s); setPrintPicker(null)
+          printPicker && printPicker.onPick(s, includeText); setPrintPicker(null)
         }}
       />
 
@@ -368,7 +388,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="location">Location</option>
               <option value="value">Highest value</option>
             </select>
-            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size) => printAll(items, size))}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText) => printAll(items, size, includeText))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -553,7 +573,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printWithPicker((size) => printLabel(item, size))}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size, includeText) => printLabel(item, size, includeText))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1087,7 +1107,7 @@ function BatchView({ onCreate, onBack, printWithPicker }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size) => printBlanks(createdIds, size))}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText) => printBlanks(createdIds, size, includeText))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -1288,8 +1308,114 @@ function UpgradeView({ plan, itemCount, onUpgrade, onBack }) {
   )
 }
 
+/* ---------------- Profile ---------------- */
+function ProfileView({ user, plan, itemCount, households, onBack, signOut }) {
+  const created = user?.created_at ? new Date(user.created_at).toLocaleDateString() : '—'
+  const planLabel = ({
+    trial: `Free trial — ${plan?.trialDaysLeft || 0} days left`,
+    active: 'Plus (paid) · active',
+    comp: FREE_FOR_ALL ? 'Free access (all features unlocked)' : 'Complimentary access',
+    free: 'Free plan',
+  })[plan?.state] || 'Unknown'
+
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>Profile</h1>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 600, flexShrink: 0 }}>
+          {(user?.email || '?').slice(0, 1).toUpperCase()}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p className="ellip" style={{ fontWeight: 500, margin: 0 }}>{user?.email}</p>
+          <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>Member since {created}</p>
+        </div>
+      </div>
+
+      <p className="muted" style={{ fontWeight: 500, fontSize: 13, margin: '4px 0 8px' }}>Account status</p>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <p style={{ margin: '0 0 4px' }}>{planLabel}</p>
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+          {FREE_FOR_ALL
+            ? 'All features are currently free for every user.'
+            : plan?.isPaid ? 'You have full access to all features.' : 'Upgrade any time from the More menu.'}
+        </p>
+      </div>
+
+      <p className="muted" style={{ fontWeight: 500, fontSize: 13, margin: '4px 0 8px' }}>Your inventory</p>
+      <div className="row" style={{ marginBottom: 14 }}>
+        <div className="stat"><p className="label">Containers</p><p className="value" style={{ fontSize: 22 }}>{itemCount}</p></div>
+        <div className="stat"><p className="label">Households</p><p className="value" style={{ fontSize: 22 }}>{households?.length || 0}</p></div>
+      </div>
+
+      <button className="btn" onClick={signOut} style={{ marginTop: 6 }}>Sign out</button>
+      <p className="muted center" style={{ fontSize: 12, marginTop: 18 }}>
+        Need to delete your account? Email {SUPPORT_EMAIL}.
+      </p>
+    </>
+  )
+}
+
+/* ---------------- How-to ---------------- */
+function HelpView({ onBack }) {
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>How to use BinStashR</h1>
+      </div>
+      <HelpText />
+    </>
+  )
+}
+
+/* ---------------- Legal viewer ---------------- */
+function LegalView({ title, body, onBack }) {
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>{title}</h1>
+      </div>
+      <div style={{ fontSize: 14, lineHeight: 1.6, paddingBottom: 20 }}>{body}</div>
+    </>
+  )
+}
+
+/* ---------------- Terms re-acceptance gate ---------------- */
+function TermsGate({ onAccept, onSignOut }) {
+  const [agreed, setAgreed] = useState(false)
+  const [show, setShow] = useState(null)   // 'terms' | 'privacy' | null
+  if (show === 'terms') return <LegalView title="Terms of Service" body={<TermsText />} onBack={() => setShow(null)} />
+  if (show === 'privacy') return <LegalView title="Privacy Policy" body={<PrivacyText />} onBack={() => setShow(null)} />
+  return (
+    <div className="app">
+      <div className="full-center" style={{ paddingTop: '8vh', alignItems: 'stretch', textAlign: 'left' }}>
+        <h2 style={{ fontSize: 20, margin: 0 }}>We've updated our Terms</h2>
+        <p className="muted" style={{ fontSize: 14, lineHeight: 1.6 }}>
+          To continue using {COMPANY_NAME}, please review and agree to our updated Terms of Service and Privacy Policy.
+        </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, lineHeight: 1.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ width: 'auto', marginTop: 3, flexShrink: 0 }} />
+          <span>
+            I agree to the{' '}
+            <button onClick={() => setShow('terms')} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--brand)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}>Terms of Service</button>
+            {' '}and{' '}
+            <button onClick={() => setShow('privacy')} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--brand)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}>Privacy Policy</button>.
+          </span>
+        </label>
+        <button className="btn primary" disabled={!agreed} onClick={onAccept}>Continue</button>
+        <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- More menu ---------------- */
-function MoreView({ setView, plan, resellerMode }) {
+function MoreView({ setView, plan, resellerMode, user }) {
   const Row = ({ icon, label, sub, onClick, accent }) => (
     <button onClick={onClick} style={{
       width: '100%', textAlign: 'left', background: 'var(--surface)',
@@ -1308,13 +1434,17 @@ function MoreView({ setView, plan, resellerMode }) {
   return (
     <>
       <div className="topbar"><h1>More</h1></div>
-      {!plan?.isPaid && <Row icon="✨" label="Upgrade to Plus" sub={plan?.state === 'trial' ? `${plan.trialDaysLeft} trial days left` : 'Unlimited & full features'} accent="var(--brand)" onClick={() => setView('upgrade')} />}
+      <Row icon="👤" label="Profile" sub={user?.email} onClick={() => setView('profile')} />
+      {!FREE_FOR_ALL && !plan?.isPaid && <Row icon="✨" label="Upgrade to Plus" sub={plan?.state === 'trial' ? `${plan.trialDaysLeft} trial days left` : 'Unlimited & full features'} accent="var(--brand)" onClick={() => setView('upgrade')} />}
       {resellerMode && <Row icon="📊" label="Sales summary" sub="Revenue, fees, profit, CSV export" onClick={() => setView('sales')} />}
       <Row icon="⏰" label="Expiring soon" sub="Pantry & inventory triage" onClick={() => setView('expiring')} />
       <Row icon="👥" label="Households" sub="Share inventory with family" onClick={() => setView('households')} />
       <Row icon="⧉" label="Print blank labels" sub="Set up bins later by scanning" onClick={() => setView('batch')} />
-      <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />
+      {SHOW_ORDER_LABELS && <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />}
       <Row icon="⚙" label="Settings" sub="Reseller mode, plan, account" onClick={() => setView('settings')} />
+      <Row icon="❓" label="How to use BinStashR" sub="Quick guide to every feature" onClick={() => setView('help')} />
+      <Row icon="📄" label="Terms of Service" onClick={() => setView('terms')} />
+      <Row icon="🔒" label="Privacy Policy" onClick={() => setView('privacy')} />
     </>
   )
 }
@@ -1397,14 +1527,13 @@ function OrderLabelsView({ user, onBack, flash }) {
 function PrintSizePicker({ open, onClose, onPick, initialSize }) {
   const [sel, setSel] = useState(initialSize || DEFAULT_SIZE)
   const [remember, setRemember] = useState(false)
+  const [includeText, setIncludeText] = useState(true)
   const [previewQR, setPreviewQR] = useState('')
-  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false) } }, [open, initialSize])
+  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true) } }, [open, initialSize])
   useEffect(() => { if (open) qrDataUrl('PREVIEW', 180).then(setPreviewQR) }, [open])
   if (!open) return null
   const size = LABEL_SIZES.find((s) => s.id === sel) || LABEL_SIZES[0]
 
-  // Scale the physical inches to a CSS preview that fits the modal.
-  // Max preview width 280px; height scales proportionally; min height 70px.
   const maxW = 280
   const scale = Math.min(maxW / (size.w * 72), 140 / (size.h * 72))
   const previewW = size.w * 72 * scale
@@ -1420,20 +1549,22 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
           Choose what you're printing on. Sheets print as a grid; roll/thermal printers print one per page.
         </p>
 
-        {/* Live preview */}
         <div style={{ background: 'var(--surface-2)', borderRadius: 9, padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
           <p className="muted" style={{ fontSize: 12, margin: 0 }}>Preview · {size.w}″ × {size.h}″</p>
           <div style={{
             width: previewW, height: previewH, background: '#fff',
             border: '1px solid #999', borderRadius: 4,
-            display: 'flex', alignItems: 'center', gap: 4, padding: 4, overflow: 'hidden',
+            display: 'flex', alignItems: 'center', justifyContent: includeText ? 'flex-start' : 'center',
+            gap: 4, padding: 4, overflow: 'hidden',
           }}>
             {previewQR && <img src={previewQR} alt="" style={{ width: qrSide, height: qrSide, flexShrink: 0 }} />}
-            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-              <div style={{ fontWeight: 'bold', fontSize: isTiny ? 9 : 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#000' }}>Sample Bin Name</div>
-              <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Category</div>
-              <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Location · Shelf 3</div>
-            </div>
+            {includeText && (
+              <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                <div style={{ fontWeight: 'bold', fontSize: isTiny ? 9 : 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#000' }}>Sample Bin Name</div>
+                <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Category</div>
+                <div style={{ fontSize: isTiny ? 7 : 10, color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Location · Shelf 3</div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1448,13 +1579,17 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
         ))}
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={includeText} onChange={(e) => setIncludeText(e.target.checked)} style={{ width: 'auto' }} />
+          Include bin name & info on label
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ width: 'auto' }} />
           Remember as my default size
         </label>
 
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => onPick(sel, remember)}>Print</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember, includeText)}>Print</button>
         </div>
       </div>
     </div>

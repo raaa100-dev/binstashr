@@ -40,6 +40,8 @@ alter table public.settings add column if not exists plan text not null default 
 alter table public.settings add column if not exists trial_ends timestamptz;
 alter table public.settings add column if not exists created_at timestamptz not null default now();
 alter table public.settings add column if not exists default_label_size text;
+alter table public.settings add column if not exists terms_version integer default 0;
+alter table public.settings add column if not exists terms_agreed_at timestamptz;
 
 -- ----- Households -----
 create table if not exists public.households (

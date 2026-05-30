@@ -77,7 +77,7 @@ export const FREE_CONTAINER_LIMIT = 5   // containers allowed after trial on the
 
 export async function fetchSettings(userId) {
   const { data, error } = await supabase
-    .from('settings').select('reseller_mode, active_household, plan, trial_ends, default_label_size').eq('user_id', userId).maybeSingle()
+    .from('settings').select('reseller_mode, active_household, plan, trial_ends, default_label_size, terms_version').eq('user_id', userId).maybeSingle()
   if (error) throw error
   // First time we see this user: start their free trial.
   if (!data) {
@@ -87,7 +87,7 @@ export async function fetchSettings(userId) {
         user_id: userId, plan: 'trial', trial_ends: ends, updated_at: new Date().toISOString(),
       })
     } catch (e) { /* non-fatal */ }
-    return { resellerMode: false, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null }
+    return { resellerMode: false, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null, termsVersion: 0 }
   }
   return {
     resellerMode: !!data.reseller_mode,
@@ -95,15 +95,17 @@ export async function fetchSettings(userId) {
     plan: data.plan || 'trial',
     trialEnds: data.trial_ends || null,
     defaultLabelSize: data.default_label_size || null,
+    termsVersion: data.terms_version || 0,
   }
 }
 
-export async function saveSettings(userId, { resellerMode, activeHousehold, plan, defaultLabelSize }) {
+export async function saveSettings(userId, { resellerMode, activeHousehold, plan, defaultLabelSize, termsVersion }) {
   const patch = { user_id: userId, updated_at: new Date().toISOString() }
   if (resellerMode !== undefined) patch.reseller_mode = resellerMode
   if (activeHousehold !== undefined) patch.active_household = activeHousehold
   if (plan !== undefined) patch.plan = plan
   if (defaultLabelSize !== undefined) patch.default_label_size = defaultLabelSize
+  if (termsVersion !== undefined) { patch.terms_version = termsVersion; patch.terms_agreed_at = new Date().toISOString() }
   const { error } = await supabase.from('settings').upsert(patch)
   if (error) throw error
 }
