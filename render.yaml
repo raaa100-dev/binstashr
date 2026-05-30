@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: binstashr
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    # Send all routes back to index.html so page refreshes and deep links
+    # don't 404 (this is a single-page app).
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    # Set these two in the Render dashboard (Environment) instead of here,
+    # so your keys aren't committed to git:
+    #   VITE_SUPABASE_URL
+    #   VITE_SUPABASE_ANON_KEY
