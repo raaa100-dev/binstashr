@@ -4,7 +4,7 @@ import Auth from './Auth.jsx'
 import {
   fetchContainers, upsertContainer, deleteContainer, moveContainer,
   fetchSettings, saveSettings, uploadPhoto, deletePhoto, FREE_CONTAINER_LIMIT,
-  createBlankContainers,
+  createBlankContainers, bulkInsertContainers,
   fetchHouseholds, createHousehold, joinHouseholdByCode,
   fetchMembers, leaveHousehold, removeMember, setMemberRole, deleteHousehold, inviteByEmail,
   fetchMaps, uploadMapImage, createMap, deleteMap, setContainerPin, clearContainerPin,
@@ -12,6 +12,7 @@ import {
 import {
   STATUSES, uid, num, money, containerValue, containerProfit,
   statusClass, shrinkImage, exportCSV, shortCode, expStatus, expLabel, soonestExp, collectExpiring, salesSummary, exportSalesCSV, planState,
+  parseCSV, guessMapping, buildContainersFromCSV,
 } from './utils'
 import { qrDataUrl, printLabel, printAll, printBlanks, LABEL_SIZES, DEFAULT_SIZE } from './print'
 import { Html5Qrcode } from 'html5-qrcode'
@@ -50,6 +51,7 @@ function Main({ user }) {
   const [plan, setPlan] = useState({ state: 'trial', trialDaysLeft: 14, isPaid: false, fullAccess: true })
   const [defaultLabelSize, setDefaultLabelSize] = useState(null)
   const [termsVersion, setTermsVersion] = useState(0)
+  const [onboarded, setOnboarded] = useState(true)   // optimistic; load sets real value
   const [loading, setLoading] = useState(true)
   const [printPicker, setPrintPicker] = useState(null)   // null or { onPick: fn }
   const [activeMapId, setActiveMapId] = useState(null)
@@ -73,6 +75,7 @@ function Main({ user }) {
         setPlan(planState(s.plan, s.trialEnds))
         setDefaultLabelSize(s.defaultLabelSize || null)
         setTermsVersion(s.termsVersion || 0)
+        setOnboarded(!!s.onboarded)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
         setSpace(validSpace)
         const [list, ms] = await Promise.all([fetchContainers(user.id, validSpace), fetchMaps(user.id, validSpace)])
@@ -272,6 +275,24 @@ function Main({ user }) {
     } catch (e) { flash('Could not save agreement') }
   }
 
+  async function finishOnboarding() {
+    setOnboarded(true)
+    try { await saveSettings(user.id, { onboarded: true }) } catch (e) {}
+  }
+
+  async function importContainers(containers) {
+    try {
+      const inserted = await bulkInsertContainers(user.id, containers, space)
+      setItems((prev) => [...inserted, ...prev])
+      flash(`Imported ${inserted.length} container${inserted.length === 1 ? '' : 's'}`)
+      return inserted.length
+    } catch (e) {
+      console.log('import error', e)
+      flash('Import failed — check your CSV format')
+      return 0
+    }
+  }
+
   async function uploadAndCreateMap(file, name) {
     try {
       const { blob, ext, width, height } = await processMapFile(file)
@@ -324,6 +345,9 @@ function Main({ user }) {
   // If the signed-in user hasn't agreed to the current terms version, show the gate.
   if (termsVersion < TERMS_VERSION) return <TermsGate onAccept={acceptTerms} onSignOut={() => supabase.auth.signOut()} />
 
+  // First-time onboarding: only show if they're brand new (no items, not yet onboarded).
+  if (!onboarded && items.length === 0) return <OnboardingFlow onDone={finishOnboarding} onSkip={finishOnboarding} onImport={() => { setOnboarded(true); saveSettings(user.id, { onboarded: true }).catch(() => {}); setView('import') }} onCreate={() => { setOnboarded(true); saveSettings(user.id, { onboarded: true }).catch(() => {}); newItem() }} />
+
   // Bottom tab nav. Center "+" launches new container (or upgrade if at limit).
   const tabs = [
     { key: 'list', label: 'Bins', icon: '📦', go: () => { goList() } },
@@ -339,7 +363,7 @@ function Main({ user }) {
     sales: 'sales', expiring: 'sales',
     more: 'more', settings: 'more', households: 'more', batch: 'more', upgrade: 'more', orderlabels: 'more',
     profile: 'more', help: 'more', terms: 'more', privacy: 'more',
-    maps: 'more', mapview: 'more', mappick: 'list',
+    maps: 'more', mapview: 'more', mappick: 'list', import: 'more',
   })[view] || 'list'
 
   const common = { items, resellerMode, user, flash }
@@ -364,6 +388,7 @@ function Main({ user }) {
       {view === 'maps' && <MapsListView maps={maps} items={items} onOpen={(id) => { setActiveMapId(id); setView('mapview') }} onUpload={uploadAndCreateMap} onDelete={removeMap} onBack={() => setView('more')} />}
       {view === 'mapview' && <MapsViewerView map={maps.find((m) => m.id === activeMapId)} items={items} onOpenBin={(id) => { openDetail(id) }} onBack={() => setView('maps')} />}
       {view === 'mappick' && <PinPickerView map={maps.find((m) => m.id === activeMapId)} container={pinPickFor} onPlace={(x, y) => { placeBinPin(pinPickFor.id, activeMapId, x, y); setPinPickFor(null); setView('detail') }} onBack={() => { setPinPickFor(null); setView('detail') }} />}
+      {view === 'import' && <ImportView onImport={importContainers} onBack={() => setView('more')} flash={flash} />}
       {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} user={user} />}
       {toast && <div className="toast">{toast}</div>}
 
@@ -1730,6 +1755,259 @@ function PinPickerView({ map, container, onPlace, onBack }) {
   )
 }
 
+/* ---------------- Onboarding (first-time experience) ---------------- */
+function OnboardingFlow({ onDone, onSkip, onImport, onCreate }) {
+  const [step, setStep] = useState(0)
+
+  const steps = [
+    {
+      icon: '👋',
+      title: `Welcome to ${COMPANY_NAME}`,
+      body: 'Stash everything you own in labeled bins. Scan a label, see what\'s inside. Search a thing, find which bin it lives in. Let\'s set you up — takes about a minute.',
+      cta: 'Next',
+      onCta: () => setStep(1),
+    },
+    {
+      icon: '📦',
+      title: 'Bins are how you organize',
+      body: 'A bin can be a real box in your garage, a shelf in your closet, a kitchen drawer, anything. You\'ll give it a name, a location, and list what\'s inside. Each one gets a QR code you stick on the real bin.',
+      cta: 'Got it',
+      onCta: () => setStep(2),
+    },
+    {
+      icon: '▢',
+      title: 'Scan to find',
+      body: 'Print the QR code (any printer — paper labels or a thermal printer both work), stick it on the bin, and from then on, point your phone\'s camera at it to see what\'s inside. You can also search by item name to find which bin has the thing you need.',
+      cta: 'Got it',
+      onCta: () => setStep(3),
+    },
+    {
+      icon: '🚀',
+      title: 'Two ways to start',
+      body: 'If you have an existing inventory spreadsheet — pantry list, reseller stock, anything — you can import it. Otherwise, create your first bin and we\'ll walk you through it.',
+      ctaPrimary: { label: '📥 Import from spreadsheet', onClick: onImport },
+      ctaSecondary: { label: '＋ Create my first bin', onClick: onCreate },
+      tertiary: { label: 'Just look around', onClick: onDone },
+    },
+  ]
+
+  const s = steps[step]
+  return (
+    <div className="app">
+      <div className="full-center" style={{ paddingTop: '8vh', textAlign: 'center', alignItems: 'center', maxWidth: 380, margin: '0 auto' }}>
+        <div style={{ fontSize: 64, marginBottom: 10 }}>{s.icon}</div>
+        <h2 style={{ fontSize: 22, margin: '0 0 14px' }}>{s.title}</h2>
+        <p style={{ fontSize: 15, lineHeight: 1.55, color: 'var(--text-2)', margin: '0 0 24px' }}>{s.body}</p>
+
+        {s.ctaPrimary ? (
+          <>
+            <button className="btn primary" onClick={s.ctaPrimary.onClick} style={{ marginBottom: 10 }}>{s.ctaPrimary.label}</button>
+            <button className="btn" onClick={s.ctaSecondary.onClick} style={{ marginBottom: 10 }}>{s.ctaSecondary.label}</button>
+            <button className="btn ghost" onClick={s.tertiary.onClick}>{s.tertiary.label}</button>
+          </>
+        ) : (
+          <>
+            <button className="btn primary" onClick={s.onCta} style={{ marginBottom: 10 }}>{s.cta}</button>
+            <button className="btn ghost" onClick={onSkip}>Skip intro</button>
+          </>
+        )}
+
+        <div style={{ display: 'flex', gap: 6, marginTop: 22 }}>
+          {steps.map((_, i) => (
+            <span key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: i === step ? 'var(--brand)' : 'var(--border)' }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- CSV import ---------------- */
+function ImportView({ onImport, onBack, flash }) {
+  const [step, setStep] = useState('upload')  // upload | map | preview | done
+  const [rows, setRows] = useState([])
+  const [hasHeader, setHasHeader] = useState(true)
+  const [mapping, setMapping] = useState({ container: -1, location: -1, category: -1, description: -1, item: -1, qty: -1, value: -1, expires: -1 })
+  const [previewContainers, setPreviewContainers] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [importedCount, setImportedCount] = useState(0)
+  const fileRef = useRef(null)
+
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = parseCSV(text)
+      if (parsed.length === 0) { flash('That CSV looks empty.'); return }
+      setRows(parsed)
+      const guess = guessMapping(parsed[0])
+      setMapping(guess)
+      setStep('map')
+    } catch (err) {
+      console.log(err); flash('Could not read that file.')
+    } finally {
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  function goPreview() {
+    const containers = buildContainersFromCSV(rows, mapping, hasHeader)
+    setPreviewContainers(containers)
+    setStep('preview')
+  }
+
+  async function doImport() {
+    setBusy(true)
+    const n = await onImport(previewContainers)
+    setBusy(false)
+    setImportedCount(n)
+    setStep('done')
+  }
+
+  const headerRow = hasHeader ? (rows[0] || []) : (rows[0] ? rows[0].map((_, i) => `Column ${i + 1}`) : [])
+  const columnCount = rows[0]?.length || 0
+  const columnOptions = Array.from({ length: columnCount }, (_, i) => i)
+
+  if (step === 'upload') {
+    return (
+      <>
+        <div className="topbar">
+          <button className="iconbtn" aria-label="Back" onClick={onBack}>‹</button>
+          <h1 style={{ fontSize: 18 }}>Import from CSV</h1>
+        </div>
+        <p className="muted" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
+          Bring in items from a spreadsheet. Works with CSV files exported from Excel, Google Sheets, Numbers, or anywhere else.
+        </p>
+
+        <div className="card" style={{ marginBottom: 14 }}>
+          <p style={{ fontWeight: 500, margin: '0 0 8px' }}>Pick a CSV file</p>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} />
+          <p className="muted" style={{ fontSize: 12, margin: '10px 0 0', lineHeight: 1.5 }}>
+            You can also export a CSV from your existing app, edit it in Excel, and import it back to make bulk changes.
+          </p>
+        </div>
+
+        <div className="card" style={{ background: 'var(--surface-2)' }}>
+          <p style={{ fontWeight: 500, margin: '0 0 8px', fontSize: 14 }}>What your CSV should look like</p>
+          <p className="muted" style={{ fontSize: 13, margin: 0, lineHeight: 1.6 }}>
+            One row per item works best — for example, columns like <code>Container, Location, Item, Qty, Value, Expires</code>.
+            Rows that share the same container name get grouped together. We'll let you map your columns to ours after you upload.
+          </p>
+        </div>
+      </>
+    )
+  }
+
+  if (step === 'map') {
+    const FIELDS = [
+      { key: 'container', label: 'Container / bin name', required: true, hint: 'Group items by this column' },
+      { key: 'location', label: 'Location', hint: 'e.g. Garage, Shelf 3' },
+      { key: 'category', label: 'Category' },
+      { key: 'description', label: 'Description / notes' },
+      { key: 'item', label: 'Item name', hint: 'Each row\'s individual item' },
+      { key: 'qty', label: 'Quantity' },
+      { key: 'value', label: 'Value or cost ($)' },
+      { key: 'expires', label: 'Expiration date' },
+    ]
+    return (
+      <>
+        <div className="topbar">
+          <button className="iconbtn" aria-label="Back" onClick={() => setStep('upload')}>‹</button>
+          <h1 style={{ fontSize: 18 }}>Match your columns</h1>
+        </div>
+        <p className="muted" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
+          We're guessing which of your columns means what. Adjust any that look wrong, then preview.
+        </p>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} style={{ width: 'auto' }} />
+          First row is a header
+        </label>
+
+        {FIELDS.map((f) => (
+          <div key={f.key} style={{ marginBottom: 10 }}>
+            <label className="field">{f.label}{f.required && ' *'}</label>
+            <select value={mapping[f.key]} onChange={(e) => setMapping({ ...mapping, [f.key]: parseInt(e.target.value) })}>
+              <option value={-1}>— Not in my CSV —</option>
+              {columnOptions.map((i) => (
+                <option key={i} value={i}>{headerRow[i] || `Column ${i + 1}`}</option>
+              ))}
+            </select>
+            {f.hint && <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>{f.hint}</p>}
+          </div>
+        ))}
+
+        <button className="btn primary" onClick={goPreview} disabled={mapping.container === -1 && mapping.item === -1} style={{ marginTop: 8 }}>
+          Preview import
+        </button>
+        {(mapping.container === -1 && mapping.item === -1) && (
+          <p className="muted center" style={{ fontSize: 12, marginTop: 8 }}>Pick at least one of container name or item name.</p>
+        )}
+      </>
+    )
+  }
+
+  if (step === 'preview') {
+    const totalItems = previewContainers.reduce((s, c) => s + c.contents.length, 0)
+    return (
+      <>
+        <div className="topbar">
+          <button className="iconbtn" aria-label="Back" onClick={() => setStep('map')}>‹</button>
+          <h1 style={{ fontSize: 18 }}>Preview</h1>
+        </div>
+        <p style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
+          Ready to import <strong>{previewContainers.length}</strong> container{previewContainers.length === 1 ? '' : 's'}
+          {totalItems > 0 && <> with <strong>{totalItems}</strong> item{totalItems === 1 ? '' : 's'} total</>}.
+        </p>
+
+        {previewContainers.length === 0 && (
+          <p className="muted center" style={{ padding: '2rem 0' }}>
+            No containers found. Go back and check your column mapping.
+          </p>
+        )}
+
+        <div style={{ marginBottom: 14, maxHeight: '40vh', overflowY: 'auto' }}>
+          {previewContainers.slice(0, 10).map((c, i) => (
+            <div key={i} className="card" style={{ marginBottom: 8, padding: 12 }}>
+              <p style={{ margin: 0, fontWeight: 500 }}>{c.name}</p>
+              <p className="muted" style={{ fontSize: 13, margin: '2px 0 0' }}>
+                {c.location ? `📍 ${c.location} · ` : ''}{c.contents.length} item{c.contents.length === 1 ? '' : 's'}
+                {c.contents.length > 0 && ` · ${c.contents.slice(0, 3).map((it) => it.name).join(', ')}${c.contents.length > 3 ? '…' : ''}`}
+              </p>
+            </div>
+          ))}
+          {previewContainers.length > 10 && (
+            <p className="muted center" style={{ fontSize: 13 }}>… and {previewContainers.length - 10} more</p>
+          )}
+        </div>
+
+        <button className="btn primary" onClick={doImport} disabled={busy || previewContainers.length === 0} style={{ marginBottom: 8 }}>
+          {busy ? 'Importing…' : `Import ${previewContainers.length} container${previewContainers.length === 1 ? '' : 's'}`}
+        </button>
+        <button className="btn ghost" onClick={() => setStep('map')}>Adjust columns</button>
+      </>
+    )
+  }
+
+  // done
+  return (
+    <>
+      <div className="topbar">
+        <h1 style={{ fontSize: 18 }}>Import complete</h1>
+      </div>
+      <div className="full-center center">
+        <div style={{ fontSize: 48 }}>✅</div>
+        <p style={{ margin: 0, fontSize: 16 }}>Imported {importedCount} container{importedCount === 1 ? '' : 's'}.</p>
+        <p className="muted" style={{ fontSize: 13, maxWidth: 320 }}>
+          You can now print labels for them, scan them, or edit any details.
+        </p>
+        <button className="btn primary" style={{ width: 'auto', marginTop: 12 }} onClick={onBack}>Done</button>
+      </div>
+    </>
+  )
+}
+
 /* ---------------- More menu ---------------- */
 function MoreView({ setView, plan, resellerMode, user }) {
   const Row = ({ icon, label, sub, onClick, accent }) => (
@@ -1756,6 +2034,7 @@ function MoreView({ setView, plan, resellerMode, user }) {
       <Row icon="⏰" label="Expiring soon" sub="Pantry & inventory triage" onClick={() => setView('expiring')} />
       <Row icon="👥" label="Households" sub="Share inventory with family" onClick={() => setView('households')} />
       <Row icon="⧉" label="Print blank labels" sub="Set up bins later by scanning" onClick={() => setView('batch')} />
+      <Row icon="📥" label="Import from CSV" sub="Bring in items from a spreadsheet" onClick={() => setView('import')} />
       <Row icon="🗺️" label="Floor plans & maps" sub="Pin bins on a building plan" onClick={() => setView('maps')} />
       {SHOW_ORDER_LABELS && <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />}
       <Row icon="⚙" label="Settings" sub="Reseller mode, plan, account" onClick={() => setView('settings')} />

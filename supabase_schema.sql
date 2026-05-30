@@ -46,6 +46,7 @@ alter table public.settings add column if not exists terms_agreed_at timestamptz
 -- JSON object like {"<household-uuid>": true, "<household-uuid>": false}.
 -- Personal space (null) still uses the top-level reseller_mode column.
 alter table public.settings add column if not exists reseller_by_space jsonb not null default '{}'::jsonb;
+alter table public.settings add column if not exists onboarded boolean not null default false;
 
 -- ----- Households -----
 create table if not exists public.households (

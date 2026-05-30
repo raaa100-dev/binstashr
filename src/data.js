@@ -54,6 +54,44 @@ export async function createBlankContainers(userId, ids, space) {
   if (error) throw error
 }
 
+// Bulk insert imported containers from CSV.
+// Each input has: name, location, category, description, expires, contents, photos.
+// Returns the array of inserted container objects with new ids.
+export async function bulkInsertContainers(userId, containers, space) {
+  function uid() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) }
+  const rows = containers.map((c) => ({
+    id: uid(),
+    user_id: userId,
+    household_id: space || null,
+    name: c.name || 'Untitled',
+    location: c.location || '',
+    category: c.category || '',
+    description: c.description || '',
+    expires: c.expires || null,
+    photos: c.photos || [],
+    contents: c.contents || [],
+    history: [],
+  }))
+  const { data, error } = await supabase.from('containers').insert(rows).select()
+  if (error) throw error
+  return (data || []).map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    household_id: r.household_id || null,
+    name: r.name,
+    location: r.location || '',
+    category: r.category || '',
+    description: r.description || '',
+    expires: r.expires || '',
+    photos: r.photos || [],
+    contents: r.contents || [],
+    history: r.history || [],
+    mapId: null,
+    pinX: null, pinY: null,
+    created: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+  }))
+}
+
 function rowToItem(r) {
   return {
     id: r.id,
@@ -80,7 +118,7 @@ export const FREE_CONTAINER_LIMIT = 5   // containers allowed after trial on the
 
 export async function fetchSettings(userId) {
   const { data, error } = await supabase
-    .from('settings').select('reseller_mode, reseller_by_space, active_household, plan, trial_ends, default_label_size, terms_version').eq('user_id', userId).maybeSingle()
+    .from('settings').select('reseller_mode, reseller_by_space, active_household, plan, trial_ends, default_label_size, terms_version, onboarded').eq('user_id', userId).maybeSingle()
   if (error) throw error
   // First time we see this user: start their free trial.
   if (!data) {
@@ -90,7 +128,7 @@ export async function fetchSettings(userId) {
         user_id: userId, plan: 'trial', trial_ends: ends, updated_at: new Date().toISOString(),
       })
     } catch (e) { /* non-fatal */ }
-    return { resellerMode: false, resellerBySpace: {}, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null, termsVersion: 0 }
+    return { resellerMode: false, resellerBySpace: {}, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null, termsVersion: 0, onboarded: false }
   }
   return {
     resellerMode: !!data.reseller_mode,                  // legacy default (Personal)
@@ -100,10 +138,11 @@ export async function fetchSettings(userId) {
     trialEnds: data.trial_ends || null,
     defaultLabelSize: data.default_label_size || null,
     termsVersion: data.terms_version || 0,
+    onboarded: !!data.onboarded,
   }
 }
 
-export async function saveSettings(userId, { resellerMode, resellerBySpace, activeHousehold, plan, defaultLabelSize, termsVersion }) {
+export async function saveSettings(userId, { resellerMode, resellerBySpace, activeHousehold, plan, defaultLabelSize, termsVersion, onboarded }) {
   const patch = { user_id: userId, updated_at: new Date().toISOString() }
   if (resellerMode !== undefined) patch.reseller_mode = resellerMode
   if (resellerBySpace !== undefined) patch.reseller_by_space = resellerBySpace
@@ -111,6 +150,7 @@ export async function saveSettings(userId, { resellerMode, resellerBySpace, acti
   if (plan !== undefined) patch.plan = plan
   if (defaultLabelSize !== undefined) patch.default_label_size = defaultLabelSize
   if (termsVersion !== undefined) { patch.terms_version = termsVersion; patch.terms_agreed_at = new Date().toISOString() }
+  if (onboarded !== undefined) patch.onboarded = onboarded
   const { error } = await supabase.from('settings').upsert(patch)
   if (error) throw error
 }

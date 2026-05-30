@@ -155,6 +155,103 @@ export function salesSummary(items, windowDays = null) {
   return { sales, totals }
 }
 
+// ---- CSV import ----
+
+// Parse a CSV string into an array of rows (each row = array of strings).
+// Handles quoted fields with commas and escaped quotes.
+export function parseCSV(text) {
+  const rows = []
+  let row = []
+  let cur = ''
+  let inQuotes = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++ }
+      else if (c === '"') inQuotes = false
+      else cur += c
+    } else {
+      if (c === '"') inQuotes = true
+      else if (c === ',') { row.push(cur); cur = '' }
+      else if (c === '\n' || c === '\r') {
+        if (cur !== '' || row.length) { row.push(cur); rows.push(row); row = []; cur = '' }
+        if (c === '\r' && text[i + 1] === '\n') i++
+      } else cur += c
+    }
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row) }
+  return rows.filter((r) => r.some((v) => (v || '').trim() !== ''))
+}
+
+// Take parsed CSV rows + a column mapping and produce container objects ready to save.
+// Mapping maps our field names to column indexes (or -1 for unset):
+//   container, location, category, description, item, qty, value, expires
+// Rows are grouped by container name. Multiple rows with the same container name
+// become one container with multiple items.
+export function buildContainersFromCSV(rows, mapping, hasHeader = true) {
+  const data = hasHeader ? rows.slice(1) : rows
+  const get = (row, key) => {
+    const i = mapping[key]
+    if (i === undefined || i < 0 || i >= row.length) return ''
+    return (row[i] || '').trim()
+  }
+  const byContainer = new Map()
+  for (const row of data) {
+    let cName = get(row, 'container')
+    const itemName = get(row, 'item')
+    // If neither name is set, skip this row.
+    if (!cName && !itemName) continue
+    // If only an item name exists, group it under a default container.
+    if (!cName) cName = 'Imported items'
+    if (!byContainer.has(cName)) {
+      byContainer.set(cName, {
+        name: cName,
+        location: get(row, 'location'),
+        category: get(row, 'category'),
+        description: get(row, 'description'),
+        expires: get(row, 'expires'),
+        contents: [],
+        photos: [],
+      })
+    }
+    const c = byContainer.get(cName)
+    if (itemName) {
+      const item = { name: itemName }
+      const qty = get(row, 'qty')
+      const value = get(row, 'value')
+      const itemExp = get(row, 'expires')
+      if (qty) item.qty = parseInt(qty) || 1
+      if (value) item.value = parseFloat(value)
+      if (itemExp && !c.expires) item.expires = itemExp
+      c.contents.push(item)
+    }
+  }
+  return Array.from(byContainer.values())
+}
+
+// Try to guess which column is which based on the header row.
+// Returns a mapping object.
+export function guessMapping(headerRow) {
+  const m = { container: -1, location: -1, category: -1, description: -1, item: -1, qty: -1, value: -1, expires: -1 }
+  if (!headerRow) return m
+  const lower = headerRow.map((h) => (h || '').toLowerCase().trim())
+  const find = (keywords) => {
+    for (let i = 0; i < lower.length; i++) {
+      for (const k of keywords) if (lower[i].includes(k)) return i
+    }
+    return -1
+  }
+  m.container = find(['container', 'bin', 'box'])
+  m.location = find(['location', 'where', 'place', 'shelf', 'room'])
+  m.category = find(['category', 'type', 'group'])
+  m.description = find(['description', 'notes', 'note', 'desc'])
+  m.item = find(['item', 'product', 'name', 'thing'])
+  m.qty = find(['qty', 'quantity', 'count', 'amount'])
+  m.value = find(['value', 'cost', 'price', 'worth', 'paid'])
+  m.expires = find(['expir', 'expiry', 'best by', 'use by'])
+  return m
+}
+
 export function exportSalesCSV(items, windowLabel) {
   const { sales, totals } = salesSummary(items, null)
   const headers = ['Date', 'Item', 'Container', 'Qty', 'Marketplace', 'SKU',
