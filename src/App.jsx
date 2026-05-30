@@ -204,6 +204,40 @@ function Main({ user }) {
     } catch (e) { flash('Could not move') }
   }
 
+  // Move several containers at once. Returns count of successful moves.
+  async function bulkMove(ids, targetSpace) {
+    if ((targetSpace || null) === (space || null)) return 0
+    let ok = 0
+    for (const id of ids) {
+      try { await moveContainer(id, targetSpace); ok++ } catch (e) {}
+    }
+    if (ok > 0) {
+      setItems((prev) => prev.filter((i) => !ids.includes(i.id)))
+      const dest = targetSpace ? (households.find((h) => h.id === targetSpace)?.name || 'household') : 'Personal'
+      flash(`Moved ${ok} bin${ok === 1 ? '' : 's'} to ${dest}`)
+    } else {
+      flash('Could not move')
+    }
+    return ok
+  }
+
+  async function bulkDelete(ids) {
+    if (!confirm(`Delete ${ids.length} bin${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return 0
+    let ok = 0
+    for (const id of ids) {
+      const it = items.find((i) => i.id === id)
+      if (it) for (const p of it.photos || []) await deletePhoto(p)
+      try { await deleteContainer(id); ok++ } catch (e) {}
+    }
+    if (ok > 0) {
+      setItems((prev) => prev.filter((i) => !ids.includes(i.id)))
+      flash(`Deleted ${ok} bin${ok === 1 ? '' : 's'}`)
+    } else {
+      flash('Could not delete')
+    }
+    return ok
+  }
+
   async function removeItem(item) {
     if (!confirm('Delete this container?')) return
     try {
@@ -301,7 +335,7 @@ function Main({ user }) {
   const common = { items, resellerMode, user, flash }
   return (
     <div className="app">
-      {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker }} />}
+      {view === 'list' && <ListView {...common} {...{ query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker, bulkMove, bulkDelete }} />}
       {view === 'form' && <FormView {...common} editing={editing} setEditing={setEditing} onSave={saveItem} onBack={() => (items.find((i) => i.id === editing.id) ? setView('detail') : goList())} />}
       {view === 'detail' && <DetailView {...common} item={editing} onEdit={() => setView('form')} onDelete={() => removeItem(editing)} onBack={goList} onQuickAdd={() => setView('quickadd')} onPull={pullItem} onMove={moveItem} households={households} space={space} printWithPicker={printWithPicker} maps={maps} onStartPinPick={(mapId) => { setActiveMapId(mapId); setPinPickFor(editing); setView('mappick') }} onUnpin={() => unpinBin(editing.id)} onViewMap={(mapId) => { setActiveMapId(mapId); setView('mapview') }} />}
       {view === 'scan' && <ScanView items={items} resellerMode={resellerMode} onFound={openDetail} onBack={goList} flash={flash} onQuickAdd={quickAddItem} />}
@@ -351,8 +385,53 @@ function Main({ user }) {
   )
 }
 
+/* ---------------- Bulk action bar (multi-select on the list) ---------------- */
+function BulkActionBar({ selected, households, space, onMove, onDelete, onExit, moveOpen, setMoveOpen }) {
+  if (moveOpen) {
+    return (
+      <div className="bulk-bar">
+        <div className="panel">
+          <p className="muted" style={{ fontSize: 13, margin: '4px 0 10px' }}>Move {selected.size} bin{selected.size === 1 ? '' : 's'} to:</p>
+          {space && (
+            <button className="opt" onClick={() => onMove(null)}>🔒 Personal</button>
+          )}
+          {households.filter((h) => h.id !== space).map((h) => (
+            <button key={h.id} className="opt" onClick={() => onMove(h.id)}>🏠 {h.name}</button>
+          ))}
+          {households.filter((h) => h.id !== space).length === 0 && !space && (
+            <p className="muted" style={{ fontSize: 13, margin: '6px 0' }}>You don't have any households yet. Create one in More → Households to share bins with other people.</p>
+          )}
+          <button className="btn ghost" onClick={() => setMoveOpen(false)} style={{ marginTop: 4 }}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+  const none = selected.size === 0
+  return (
+    <div className="bulk-bar">
+      <div className="inner">
+        <button className="btn" disabled={none} onClick={() => setMoveOpen(true)} style={{ background: none ? 'var(--surface)' : 'var(--brand-bg)', color: none ? 'var(--text-2)' : 'var(--brand-text)', borderColor: none ? 'var(--border)' : 'var(--brand)' }}>↪ Move…</button>
+        <button className="btn danger" disabled={none} onClick={onDelete}>🗑 Delete</button>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- List ---------------- */
-function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker }) {
+function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, openDetail, newItem, setView, households, space, setSpace, plan, printWithPicker, bulkMove, bulkDelete }) {
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState(() => new Set())
+  const [moveOpen, setMoveOpen] = useState(false)
+
+  function toggleSelect(id) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function exitSelect() { setSelectMode(false); setSelected(new Set()); setMoveOpen(false) }
+  function selectAll(ids) { setSelected(new Set(ids)) }
   const q = query.trim().toLowerCase()
   let results = items.map((it) => ({ it, hit: null }))
   if (q) {
@@ -379,7 +458,16 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
   return (
     <>
       <div className="topbar">
-        <h1>{activeName}</h1>
+        {selectMode
+          ? <>
+              <button className="iconbtn" aria-label="Cancel selection" onClick={exitSelect}>✕</button>
+              <h1 style={{ fontSize: 17 }}>{selected.size} selected</h1>
+              <button className="iconbtn" aria-label="Select all" title="Select all visible" style={{ width: 'auto', padding: '0 12px', fontSize: 13 }}
+                onClick={() => selected.size === results.length ? setSelected(new Set()) : selectAll(results.map((r) => r.it.id))}>
+                {selected.size === results.length && results.length > 0 ? 'Clear' : 'Select all'}
+              </button>
+            </>
+          : <h1>{activeName}</h1>}
       </div>
 
       {plan && plan.state === 'trial' && (
@@ -437,6 +525,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="location">Location</option>
               <option value="value">Highest value</option>
             </select>
+            <button className="iconbtn" title="Select multiple" onClick={() => setSelectMode(true)}>☑</button>
             <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText) => printAll(items, size, includeText))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
@@ -450,8 +539,16 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
         const cv = containerValue(it)
         const se = soonestExp(it)
         const st = expStatus(se)
+        const isSel = selected.has(it.id)
         return (
-          <div key={it.id} className="listcard" onClick={() => openDetail(it.id)}>
+          <div key={it.id} className="listcard"
+            onClick={() => selectMode ? toggleSelect(it.id) : openDetail(it.id)}
+            style={selectMode && isSel ? { borderColor: 'var(--brand)', background: 'var(--brand-bg)' } : undefined}>
+            {selectMode && (
+              <div style={{ width: 24, height: 24, flexShrink: 0, borderRadius: 6, border: `2px solid ${isSel ? 'var(--brand)' : 'var(--border-strong)'}`, background: isSel ? 'var(--brand)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16 }}>
+                {isSel ? '✓' : ''}
+              </div>
+            )}
             {it.photos && it.photos[0]
               ? <img className="thumb" src={it.photos[0]} alt="" />
               : <div className="thumb placeholder">📦</div>}
@@ -465,10 +562,25 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
                 <span className={`pill ${st}`} style={{ marginTop: 4, display: 'inline-block' }}>{expLabel(se)}</span>
               )}
             </div>
-            <span className="muted">›</span>
+            {!selectMode && <span className="muted">›</span>}
           </div>
         )
       })}
+      {selectMode && (
+        <BulkActionBar
+          selected={selected}
+          allIds={results.map((r) => r.it.id)}
+          households={households}
+          space={space}
+          onSelectAll={() => selectAll(results.map((r) => r.it.id))}
+          onClear={() => setSelected(new Set())}
+          onExit={exitSelect}
+          onMove={async (target) => { await bulkMove(Array.from(selected), target); exitSelect() }}
+          onDelete={async () => { const n = await bulkDelete(Array.from(selected)); if (n > 0) exitSelect() }}
+          moveOpen={moveOpen}
+          setMoveOpen={setMoveOpen}
+        />
+      )}
     </>
   )
 }

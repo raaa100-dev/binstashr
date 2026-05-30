@@ -188,6 +188,27 @@ label.field { font-size: 13px; color: var(--text-2); display: block; margin-bott
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 
+/* ---- Bulk action bar (above the tab nav) ---- */
+.bulk-bar {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 40;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -3px 10px rgba(0,0,0,0.08);
+  padding: 10px 12px;
+}
+.bulk-bar .inner { max-width: 560px; margin: 0 auto; display: flex; gap: 8px; }
+.bulk-bar .panel {
+  max-width: 560px; margin: 0 auto;
+}
+.bulk-bar .panel .opt {
+  display: block; width: 100%; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 9px; background: var(--surface); margin-bottom: 8px;
+  font-size: 14px;
+}
+
 .auth-logo { width: 64px; height: 64px; border-radius: 16px; background: var(--brand); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 18px; }
 
 .toggle { width: 52px; height: 30px; border-radius: 999px; position: relative; border: 1px solid var(--border-strong); background: var(--surface-2); flex-shrink: 0; padding: 0; }
