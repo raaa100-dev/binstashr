@@ -8,7 +8,7 @@ import { shortCode } from './utils'
 export const LABEL_SIZES = [
   { id: 'letter',       label: 'Letter sheet (1 big label)', w: 4,      h: 3,      kind: 'sheet',   gridCols: 1, gridRows: 1 },
   { id: 'avery-5160',   label: 'Avery 5160 (1×2-5/8")',      w: 2.625,  h: 1,      kind: 'sheet',   gridCols: 3, gridRows: 10, colGap: 0.125, sheetMarginV: 0.5, sheetMarginH: 0.1875 },
-  { id: 'ol800sp',      label: 'OL800SP (2.5×1.563", 18 per sheet)', w: 2.5, h: 1.563, kind: 'sheet', gridCols: 3, gridRows: 6, rowGap: 0.125, sheetMarginV: 0.5, sheetMarginH: 0.5 },
+  { id: 'ol800sp',      label: 'OL800SP (2.5×1.563", 18 per sheet)', w: 2.5, h: 1.563, kind: 'sheet', gridCols: 3, gridRows: 6, colGap: 0.125, rowGap: 0.125, sheetMarginV: 0.5, sheetMarginH: 0.375 },
   { id: 'dymo-30252',   label: 'Dymo 30252 (1-1/8×3-1/2")',  w: 3.5,    h: 1.125,  kind: 'roll' },
   { id: 'brother-dk1201', label: 'Brother DK-1201 (1.1×3.5")', w: 3.5,  h: 1.1,    kind: 'roll' },
   { id: '2x4',          label: '2×4" shipping',              w: 4,      h: 2,      kind: 'roll' },
