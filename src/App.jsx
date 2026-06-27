@@ -52,6 +52,8 @@ function Main({ user }) {
   const [maps, setMaps] = useState([])
   const [plan, setPlan] = useState({ state: 'trial', trialDaysLeft: 14, isPaid: false, fullAccess: true })
   const [defaultLabelSize, setDefaultLabelSize] = useState(null)
+  const [labelOffsetX, setLabelOffsetX] = useState(0)
+  const [labelOffsetY, setLabelOffsetY] = useState(0)
   const [termsVersion, setTermsVersion] = useState(0)
   const [onboarded, setOnboarded] = useState(true)   // optimistic; load sets real value
   const [loading, setLoading] = useState(true)
@@ -76,6 +78,8 @@ function Main({ user }) {
         setHouseholds(hs)
         setPlan(planState(s.plan, s.trialEnds))
         setDefaultLabelSize(s.defaultLabelSize || null)
+        setLabelOffsetX(s.labelOffsetX || 0)
+        setLabelOffsetY(s.labelOffsetY || 0)
         setTermsVersion(s.termsVersion || 0)
         setOnboarded(!!s.onboarded)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
@@ -423,12 +427,15 @@ function Main({ user }) {
         open={!!printPicker}
         onClose={() => setPrintPicker(null)}
         initialSize={defaultLabelSize || DEFAULT_SIZE}
-        onPick={async (s, remember, includeText, copies) => {
+        initialOffsetX={labelOffsetX}
+        initialOffsetY={labelOffsetY}
+        onPick={async (s, remember, includeText, copies, offsets) => {
           if (remember) {
             setDefaultLabelSize(s)
-            try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {}
+            setLabelOffsetX(offsets.x); setLabelOffsetY(offsets.y)
+            try { await saveSettings(user.id, { defaultLabelSize: s, labelOffsetX: offsets.x, labelOffsetY: offsets.y }) } catch (e) {}
           }
-          printPicker && printPicker.onPick(s, includeText, copies); setPrintPicker(null)
+          printPicker && printPicker.onPick(s, includeText, copies, offsets); setPrintPicker(null)
         }}
       />
 
@@ -588,7 +595,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="value">Highest value</option>
             </select>
             <button className="iconbtn" title="Select multiple" onClick={() => setSelectMode(true)}>☑</button>
-            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies) => printAll(items, size, includeText, copies))}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies, offsets) => printAll(items, size, includeText, copies, offsets))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -811,7 +818,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printWithPicker((size, includeText, copies) => printLabel(item, size, includeText, copies))}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size, includeText, copies, offsets) => printLabel(item, size, includeText, copies, offsets))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1478,7 +1485,7 @@ function BatchView({ onCreate, onBack, printWithPicker }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies) => printBlanks(createdIds, size, includeText, copies))}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies, offsets) => printBlanks(createdIds, size, includeText, copies, offsets))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -2339,16 +2346,25 @@ function OrderLabelsView({ user, onBack, flash }) {
 }
 
 /* ---------------- Print size picker (modal) with live preview ---------------- */
-function PrintSizePicker({ open, onClose, onPick, initialSize }) {
+function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 0, initialOffsetY = 0 }) {
   const [sel, setSel] = useState(initialSize || DEFAULT_SIZE)
   const [remember, setRemember] = useState(false)
   const [includeText, setIncludeText] = useState(true)
   const [doubleUp, setDoubleUp] = useState(false)
   const [previewQR, setPreviewQR] = useState('')
-  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true); setDoubleUp(false) } }, [open, initialSize])
+  // Offsets in inches; positive Y moves grid DOWN, positive X moves grid RIGHT.
+  const [offsetX, setOffsetX] = useState(initialOffsetX || 0)
+  const [offsetY, setOffsetY] = useState(initialOffsetY || 0)
+  useEffect(() => {
+    if (open) {
+      setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true); setDoubleUp(false)
+      setOffsetX(initialOffsetX || 0); setOffsetY(initialOffsetY || 0)
+    }
+  }, [open, initialSize, initialOffsetX, initialOffsetY])
   useEffect(() => { if (open) qrDataUrl('PREVIEW', 180).then(setPreviewQR) }, [open])
   if (!open) return null
   const size = LABEL_SIZES.find((s) => s.id === sel) || LABEL_SIZES[0]
+  const isSheet = size.kind === 'sheet' && (size.gridCols || 1) > 1 && (size.gridRows || 1) > 1
 
   const maxW = 280
   const scale = Math.min(maxW / (size.w * 72), 140 / (size.h * 72))
@@ -2356,6 +2372,13 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
   const previewH = size.h * 72 * scale
   const qrSide = Math.min(previewW, previewH) - 8
   const isTiny = size.w < 3
+
+  function bump(axis, amount) {
+    if (axis === 'x') setOffsetX(Math.max(-1, Math.min(1, +(offsetX + amount).toFixed(4))))
+    else setOffsetY(Math.max(-1, Math.min(1, +(offsetY + amount).toFixed(4))))
+  }
+  function resetOffsets() { setOffsetX(0); setOffsetY(0) }
+  const offLabel = (v) => v === 0 ? '0″' : (v > 0 ? '+' : '') + (v * 16).toFixed(0) + '/16″'
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -2394,6 +2417,30 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
           </div>
         ))}
 
+        {isSheet && (
+          <div style={{ marginTop: 14, padding: 12, background: 'var(--surface-2)', borderRadius: 9 }}>
+            <p style={{ fontSize: 13, fontWeight: 500, margin: '0 0 4px' }}>Fine-tune position on sheet</p>
+            <p className="muted" style={{ fontSize: 12, margin: '0 0 10px', lineHeight: 1.5 }}>
+              If labels don't land on the sheet correctly, nudge them. Test on plain paper first, then save the offset for your printer.
+            </p>
+            <div className="row" style={{ marginBottom: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, width: 50 }}>Up/down</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bump('y', -1 / 16)}>▲ Up</button>
+              <span className="muted" style={{ fontSize: 13, width: 60, textAlign: 'center' }}>{offLabel(offsetY)}</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bump('y', 1 / 16)}>▼ Down</button>
+            </div>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <span style={{ fontSize: 13, width: 50 }}>Left/right</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bump('x', -1 / 16)}>◀ Left</button>
+              <span className="muted" style={{ fontSize: 13, width: 60, textAlign: 'center' }}>{offLabel(offsetX)}</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bump('x', 1 / 16)}>▶ Right</button>
+            </div>
+            {(offsetX !== 0 || offsetY !== 0) && (
+              <button className="btn ghost" style={{ marginTop: 6, fontSize: 13 }} onClick={resetOffsets}>Reset to zero</button>
+            )}
+          </div>
+        )}
+
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={includeText} onChange={(e) => setIncludeText(e.target.checked)} style={{ width: 'auto' }} />
           Include bin name & info on label
@@ -2404,12 +2451,12 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ width: 'auto' }} />
-          Remember as my default size
+          Remember as my default <span className="muted" style={{ fontSize: 12 }}>(size & offset)</span>
         </label>
 
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1)}>Print</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY })}>Print</button>
         </div>
       </div>
     </div>

@@ -39,7 +39,7 @@ function labelHTML(size, qr, lines) {
 }
 
 // Generate the print HTML for a list of labels at a chosen size.
-async function buildSheet(labels, sizeId) {
+async function buildSheet(labels, sizeId, offsets = { x: 0, y: 0 }) {
   const size = LABEL_SIZES.find((s) => s.id === sizeId) || LABEL_SIZES.find((s) => s.id === DEFAULT_SIZE)
   // pre-generate QR codes
   const labelsWithQR = await Promise.all(labels.map(async (l) => ({ ...l, qr: await qrDataUrl(l.id, 220) })))
@@ -57,8 +57,10 @@ async function buildSheet(labels, sizeId) {
           const rowGap = size.rowGap || 0
           const totalW = size.w * size.gridCols + colGap * (size.gridCols - 1)
           const totalH = size.h * size.gridRows + rowGap * (size.gridRows - 1)
-          const mh = size.sheetMarginH !== undefined ? size.sheetMarginH : Math.max(0.25, (8.5 - totalW) / 2)
-          const mv = size.sheetMarginV !== undefined ? size.sheetMarginV : Math.max(0.25, (11 - totalH) / 2)
+          let mh = size.sheetMarginH !== undefined ? size.sheetMarginH : Math.max(0.25, (8.5 - totalW) / 2)
+          let mv = size.sheetMarginV !== undefined ? size.sheetMarginV : Math.max(0.25, (11 - totalH) / 2)
+          mh = Math.max(0, mh + (offsets.x || 0))
+          mv = Math.max(0, mv + (offsets.y || 0))
           return `@page { size: letter; margin: ${mv}in ${mh}in; }
              body { margin: 0; }
              .sheet { display: grid; grid-template-columns: repeat(${size.gridCols}, ${size.w}in); grid-auto-rows: ${size.h}in; column-gap: ${colGap}in; row-gap: ${rowGap}in; }
@@ -88,7 +90,7 @@ function openPrint(html) {
 }
 
 // Print one label for a single container, at the given size.
-export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
+export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true, copies = 1, offsets = { x: 0, y: 0 }) {
   const lines = includeText ? [item.name || 'Untitled'] : []
   if (includeText) {
     if (item.category) lines.push(item.category)
@@ -96,11 +98,11 @@ export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true
   }
   const one = { id: item.id, lines }
   const labels = Array.from({ length: copies }, () => one)
-  openPrint(await buildSheet(labels, sizeId))
+  openPrint(await buildSheet(labels, sizeId, offsets))
 }
 
 // Print labels for many containers, at the given size.
-export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
+export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true, copies = 1, offsets = { x: 0, y: 0 }) {
   if (!items.length) return
   const labels = []
   for (const it of items) {
@@ -111,16 +113,16 @@ export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true,
     }
     for (let n = 0; n < copies; n++) labels.push({ id: it.id, lines })
   }
-  openPrint(await buildSheet(labels, sizeId))
+  openPrint(await buildSheet(labels, sizeId, offsets))
 }
 
 // Print blank labels (just QR + short human-readable code).
-export async function printBlanks(ids, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
+export async function printBlanks(ids, sizeId = DEFAULT_SIZE, includeText = true, copies = 1, offsets = { x: 0, y: 0 }) {
   if (!ids.length) return
   const labels = []
   for (const id of ids) {
     const label = { id, lines: includeText ? [shortCode(id)] : [] }
     for (let n = 0; n < copies; n++) labels.push(label)
   }
-  openPrint(await buildSheet(labels, sizeId))
+  openPrint(await buildSheet(labels, sizeId, offsets))
 }
