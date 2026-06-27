@@ -118,7 +118,7 @@ export const FREE_CONTAINER_LIMIT = 5   // containers allowed after trial on the
 
 export async function fetchSettings(userId) {
   const { data, error } = await supabase
-    .from('settings').select('reseller_mode, reseller_by_space, active_household, plan, trial_ends, default_label_size, label_offset_x, label_offset_y, terms_version, onboarded').eq('user_id', userId).maybeSingle()
+    .from('settings').select('reseller_mode, reseller_by_space, active_household, plan, trial_ends, default_label_size, label_offset_x, label_offset_y, label_row_scale, terms_version, onboarded').eq('user_id', userId).maybeSingle()
   if (error) throw error
   // First time we see this user: start their free trial.
   if (!data) {
@@ -128,7 +128,7 @@ export async function fetchSettings(userId) {
         user_id: userId, plan: 'trial', trial_ends: ends, updated_at: new Date().toISOString(),
       })
     } catch (e) { /* non-fatal */ }
-    return { resellerMode: false, resellerBySpace: {}, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null, labelOffsetX: 0, labelOffsetY: 0, termsVersion: 0, onboarded: false }
+    return { resellerMode: false, resellerBySpace: {}, activeHousehold: null, plan: 'trial', trialEnds: ends, defaultLabelSize: null, labelOffsetX: 0, labelOffsetY: 0, labelRowScale: 1, termsVersion: 0, onboarded: false }
   }
   return {
     resellerMode: !!data.reseller_mode,                  // legacy default (Personal)
@@ -139,12 +139,13 @@ export async function fetchSettings(userId) {
     defaultLabelSize: data.default_label_size || null,
     labelOffsetX: data.label_offset_x || 0,
     labelOffsetY: data.label_offset_y || 0,
+    labelRowScale: data.label_row_scale || 1,
     termsVersion: data.terms_version || 0,
     onboarded: !!data.onboarded,
   }
 }
 
-export async function saveSettings(userId, { resellerMode, resellerBySpace, activeHousehold, plan, defaultLabelSize, labelOffsetX, labelOffsetY, termsVersion, onboarded }) {
+export async function saveSettings(userId, { resellerMode, resellerBySpace, activeHousehold, plan, defaultLabelSize, labelOffsetX, labelOffsetY, labelRowScale, termsVersion, onboarded }) {
   const patch = { user_id: userId, updated_at: new Date().toISOString() }
   if (resellerMode !== undefined) patch.reseller_mode = resellerMode
   if (resellerBySpace !== undefined) patch.reseller_by_space = resellerBySpace
@@ -153,6 +154,7 @@ export async function saveSettings(userId, { resellerMode, resellerBySpace, acti
   if (defaultLabelSize !== undefined) patch.default_label_size = defaultLabelSize
   if (labelOffsetX !== undefined) patch.label_offset_x = labelOffsetX
   if (labelOffsetY !== undefined) patch.label_offset_y = labelOffsetY
+  if (labelRowScale !== undefined) patch.label_row_scale = labelRowScale
   if (termsVersion !== undefined) { patch.terms_version = termsVersion; patch.terms_agreed_at = new Date().toISOString() }
   if (onboarded !== undefined) patch.onboarded = onboarded
   const { error } = await supabase.from('settings').upsert(patch)

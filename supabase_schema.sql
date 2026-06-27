@@ -42,6 +42,7 @@ alter table public.settings add column if not exists created_at timestamptz not 
 alter table public.settings add column if not exists default_label_size text;
 alter table public.settings add column if not exists label_offset_x real not null default 0;
 alter table public.settings add column if not exists label_offset_y real not null default 0;
+alter table public.settings add column if not exists label_row_scale real not null default 1;
 alter table public.settings add column if not exists terms_version integer default 0;
 alter table public.settings add column if not exists terms_agreed_at timestamptz;
 -- Per-household reseller mode overrides for this user.

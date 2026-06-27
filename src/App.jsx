@@ -54,6 +54,7 @@ function Main({ user }) {
   const [defaultLabelSize, setDefaultLabelSize] = useState(null)
   const [labelOffsetX, setLabelOffsetX] = useState(0)
   const [labelOffsetY, setLabelOffsetY] = useState(0)
+  const [labelRowScale, setLabelRowScale] = useState(1)
   const [termsVersion, setTermsVersion] = useState(0)
   const [onboarded, setOnboarded] = useState(true)   // optimistic; load sets real value
   const [loading, setLoading] = useState(true)
@@ -80,6 +81,7 @@ function Main({ user }) {
         setDefaultLabelSize(s.defaultLabelSize || null)
         setLabelOffsetX(s.labelOffsetX || 0)
         setLabelOffsetY(s.labelOffsetY || 0)
+        setLabelRowScale(s.labelRowScale || 1)
         setTermsVersion(s.termsVersion || 0)
         setOnboarded(!!s.onboarded)
         const validSpace = s.activeHousehold && hs.some((h) => h.id === s.activeHousehold) ? s.activeHousehold : null
@@ -429,13 +431,14 @@ function Main({ user }) {
         initialSize={defaultLabelSize || DEFAULT_SIZE}
         initialOffsetX={labelOffsetX}
         initialOffsetY={labelOffsetY}
-        onPick={async (s, remember, includeText, copies, offsets) => {
+        initialRowScale={labelRowScale}
+        onPick={async (s, remember, includeText, copies, offsets, rowScale) => {
           if (remember) {
             setDefaultLabelSize(s)
-            setLabelOffsetX(offsets.x); setLabelOffsetY(offsets.y)
-            try { await saveSettings(user.id, { defaultLabelSize: s, labelOffsetX: offsets.x, labelOffsetY: offsets.y }) } catch (e) {}
+            setLabelOffsetX(offsets.x); setLabelOffsetY(offsets.y); setLabelRowScale(rowScale)
+            try { await saveSettings(user.id, { defaultLabelSize: s, labelOffsetX: offsets.x, labelOffsetY: offsets.y, labelRowScale: rowScale }) } catch (e) {}
           }
-          printPicker && printPicker.onPick(s, includeText, copies, offsets); setPrintPicker(null)
+          printPicker && printPicker.onPick(s, includeText, copies, offsets, rowScale); setPrintPicker(null)
         }}
       />
 
@@ -595,7 +598,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="value">Highest value</option>
             </select>
             <button className="iconbtn" title="Select multiple" onClick={() => setSelectMode(true)}>☑</button>
-            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies, offsets) => printAll(items, size, includeText, copies, offsets))}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printAll(items, size, includeText, copies, offsets, rowScale))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -818,7 +821,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printWithPicker((size, includeText, copies, offsets) => printLabel(item, size, includeText, copies, offsets))}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printLabel(item, size, includeText, copies, offsets, rowScale))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1485,7 +1488,7 @@ function BatchView({ onCreate, onBack, printWithPicker }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies, offsets) => printBlanks(createdIds, size, includeText, copies, offsets))}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printBlanks(createdIds, size, includeText, copies, offsets, rowScale))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -2346,7 +2349,7 @@ function OrderLabelsView({ user, onBack, flash }) {
 }
 
 /* ---------------- Print size picker (modal) with live preview ---------------- */
-function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 0, initialOffsetY = 0 }) {
+function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 0, initialOffsetY = 0, initialRowScale = 1 }) {
   const [sel, setSel] = useState(initialSize || DEFAULT_SIZE)
   const [remember, setRemember] = useState(false)
   const [includeText, setIncludeText] = useState(true)
@@ -2355,12 +2358,15 @@ function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 
   // Offsets in inches; positive Y moves grid DOWN, positive X moves grid RIGHT.
   const [offsetX, setOffsetX] = useState(initialOffsetX || 0)
   const [offsetY, setOffsetY] = useState(initialOffsetY || 0)
+  // Row scale: multiplier on each row's height. > 1 spreads rows apart (fixes
+  // a printer that compresses vertical spacing); < 1 pulls them together.
+  const [rowScale, setRowScale] = useState(initialRowScale || 1)
   useEffect(() => {
     if (open) {
       setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true); setDoubleUp(false)
-      setOffsetX(initialOffsetX || 0); setOffsetY(initialOffsetY || 0)
+      setOffsetX(initialOffsetX || 0); setOffsetY(initialOffsetY || 0); setRowScale(initialRowScale || 1)
     }
-  }, [open, initialSize, initialOffsetX, initialOffsetY])
+  }, [open, initialSize, initialOffsetX, initialOffsetY, initialRowScale])
   useEffect(() => { if (open) qrDataUrl('PREVIEW', 180).then(setPreviewQR) }, [open])
   if (!open) return null
   const size = LABEL_SIZES.find((s) => s.id === sel) || LABEL_SIZES[0]
@@ -2377,8 +2383,12 @@ function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 
     if (axis === 'x') setOffsetX(Math.max(-1, Math.min(1, +(offsetX + amount).toFixed(4))))
     else setOffsetY(Math.max(-1, Math.min(1, +(offsetY + amount).toFixed(4))))
   }
-  function resetOffsets() { setOffsetX(0); setOffsetY(0) }
+  function bumpScale(amount) {
+    setRowScale(Math.max(0.9, Math.min(1.1, +(rowScale + amount).toFixed(4))))
+  }
+  function resetOffsets() { setOffsetX(0); setOffsetY(0); setRowScale(1) }
   const offLabel = (v) => v === 0 ? '0″' : (v > 0 ? '+' : '') + (v * 16).toFixed(0) + '/16″'
+  const scaleLabel = (v) => v === 1 ? 'Normal' : ((v - 1) * 100).toFixed(1) + '%'
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -2435,8 +2445,17 @@ function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 
               <span className="muted" style={{ fontSize: 13, width: 60, textAlign: 'center' }}>{offLabel(offsetX)}</span>
               <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bump('x', 1 / 16)}>▶ Right</button>
             </div>
-            {(offsetX !== 0 || offsetY !== 0) && (
-              <button className="btn ghost" style={{ marginTop: 6, fontSize: 13 }} onClick={resetOffsets}>Reset to zero</button>
+            <div className="row" style={{ marginTop: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, width: 50 }}>Row gap</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bumpScale(-0.005)}>− Tighter</button>
+              <span className="muted" style={{ fontSize: 13, width: 60, textAlign: 'center' }}>{scaleLabel(rowScale)}</span>
+              <button className="btn ghost" style={{ width: 'auto' }} onClick={() => bumpScale(0.005)}>+ Looser</button>
+            </div>
+            <p className="muted" style={{ fontSize: 11, margin: '6px 0 0', lineHeight: 1.4 }}>
+              Use "Looser" if top labels print too low and bottom labels too high (printer is compressing). "Tighter" for the opposite.
+            </p>
+            {(offsetX !== 0 || offsetY !== 0 || rowScale !== 1) && (
+              <button className="btn ghost" style={{ marginTop: 6, fontSize: 13 }} onClick={resetOffsets}>Reset all to zero</button>
             )}
           </div>
         )}
@@ -2454,9 +2473,24 @@ function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 
           Remember as my default <span className="muted" style={{ fontSize: 12 }}>(size & offset)</span>
         </label>
 
+        {isSheet && (
+          <div style={{ marginTop: 14, padding: 12, background: '#fff8e0', border: '1px solid #f0d069', borderRadius: 9 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px', color: '#7a5800' }}>⚠️ Before you tap Print</p>
+            <p style={{ fontSize: 13, margin: '0 0 6px', lineHeight: 1.5, color: '#5a4400' }}>
+              In the print dialog that opens, set these or labels won't line up:
+            </p>
+            <ul style={{ fontSize: 13, margin: 0, paddingLeft: 18, lineHeight: 1.6, color: '#5a4400' }}>
+              <li><strong>Scale: 100%</strong> (or "Actual size") — not "Fit to page"</li>
+              <li><strong>Margins: None</strong> or "Default"</li>
+              <li><strong>Paper: Letter</strong> (8.5 × 11 in)</li>
+              <li>Print on <strong>plain paper first</strong> to test, then real labels</li>
+            </ul>
+          </div>
+        )}
+
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY })}>Print</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY }, rowScale)}>Print</button>
         </div>
       </div>
     </div>
