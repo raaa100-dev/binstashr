@@ -15,7 +15,7 @@ import {
   statusClass, shrinkImage, exportCSV, shortCode, expStatus, expLabel, soonestExp, collectExpiring, salesSummary, exportSalesCSV, planState,
   parseCSV, guessMapping, buildContainersFromCSV,
 } from './utils'
-import { qrDataUrl, printLabel, printAll, printBlanks, LABEL_SIZES, DEFAULT_SIZE } from './print'
+import { qrDataUrl, printLabel, printAll, printBlanks, downloadLabelPDF, downloadAllPDF, downloadBlanksPDF, LABEL_SIZES, DEFAULT_SIZE } from './print'
 import { Html5Qrcode } from 'html5-qrcode'
 import { FREE_FOR_ALL, SHOW_ORDER_LABELS, TERMS_VERSION, COMPANY_NAME, SUPPORT_EMAIL } from './config'
 import { TermsText, PrivacyText } from './LegalText'
@@ -432,13 +432,13 @@ function Main({ user }) {
         initialOffsetX={labelOffsetX}
         initialOffsetY={labelOffsetY}
         initialRowScale={labelRowScale}
-        onPick={async (s, remember, includeText, copies, offsets, rowScale) => {
+        onPick={async (s, remember, includeText, copies, offsets, rowScale, mode) => {
           if (remember) {
             setDefaultLabelSize(s)
             setLabelOffsetX(offsets.x); setLabelOffsetY(offsets.y); setLabelRowScale(rowScale)
             try { await saveSettings(user.id, { defaultLabelSize: s, labelOffsetX: offsets.x, labelOffsetY: offsets.y, labelRowScale: rowScale }) } catch (e) {}
           }
-          printPicker && printPicker.onPick(s, includeText, copies, offsets, rowScale); setPrintPicker(null)
+          printPicker && printPicker.onPick(s, includeText, copies, offsets, rowScale, mode); setPrintPicker(null)
         }}
       />
 
@@ -598,7 +598,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="value">Highest value</option>
             </select>
             <button className="iconbtn" title="Select multiple" onClick={() => setSelectMode(true)}>☑</button>
-            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printAll(items, size, includeText, copies, offsets, rowScale))}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale, mode) => mode === 'pdf' ? downloadAllPDF(items, size, includeText, copies, offsets, rowScale) : printAll(items, size, includeText, copies, offsets, rowScale))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -821,7 +821,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printLabel(item, size, includeText, copies, offsets, rowScale))}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale, mode) => mode === 'pdf' ? downloadLabelPDF(item, size, includeText, copies, offsets, rowScale) : printLabel(item, size, includeText, copies, offsets, rowScale))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1488,7 +1488,7 @@ function BatchView({ onCreate, onBack, printWithPicker }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale) => printBlanks(createdIds, size, includeText, copies, offsets, rowScale))}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies, offsets, rowScale, mode) => mode === 'pdf' ? downloadBlanksPDF(createdIds, size, includeText, copies, offsets, rowScale) : printBlanks(createdIds, size, includeText, copies, offsets, rowScale))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -2475,23 +2475,29 @@ function PrintSizePicker({ open, onClose, onPick, initialSize, initialOffsetX = 
 
         {isSheet && (
           <div style={{ marginTop: 14, padding: 12, background: '#fff8e0', border: '1px solid #f0d069', borderRadius: 9 }}>
-            <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px', color: '#7a5800' }}>⚠️ Before you tap Print</p>
+            <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px', color: '#7a5800' }}>If you choose "Print directly"</p>
             <p style={{ fontSize: 13, margin: '0 0 6px', lineHeight: 1.5, color: '#5a4400' }}>
-              In the print dialog that opens, set these or labels won't line up:
+              In your browser's print dialog, set:
             </p>
             <ul style={{ fontSize: 13, margin: 0, paddingLeft: 18, lineHeight: 1.6, color: '#5a4400' }}>
               <li><strong>Scale: 100%</strong> (or "Actual size") — not "Fit to page"</li>
               <li><strong>Margins: None</strong> or "Default"</li>
               <li><strong>Paper: Letter</strong> (8.5 × 11 in)</li>
-              <li>Print on <strong>plain paper first</strong> to test, then real labels</li>
             </ul>
+            <p style={{ fontSize: 12, margin: '8px 0 0', lineHeight: 1.5, color: '#5a4400' }}>
+              The PDF option below is more reliable for getting alignment right.
+            </p>
           </div>
         )}
 
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY }, rowScale)}>Print</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY }, rowScale, 'pdf')}>📄 Download PDF</button>
         </div>
+        <button className="btn" style={{ marginTop: 8, fontSize: 13 }} onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1, { x: offsetX, y: offsetY }, rowScale, 'direct')}>🖨 Print directly (less reliable)</button>
+        {isSheet && <p className="muted center" style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+          PDF is recommended — open the downloaded file and print it from Adobe Reader or Preview with "Actual size" selected. This is the most reliable way to get labels lined up.
+        </p>}
       </div>
     </div>
   )
