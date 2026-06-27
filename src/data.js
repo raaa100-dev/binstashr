@@ -286,6 +286,15 @@ export async function clearContainerPin(containerId) {
   if (error) throw error
 }
 
+// Submit user feedback / bug report / idea.
+export async function submitFeedback(userId, email, { kind, message, appState }) {
+  const { error } = await supabase.from('feedback').insert({
+    user_id: userId, email, kind, message, app_state: appState || null,
+    user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+  })
+  if (error) throw error
+}
+
 // ---- Photos (Supabase Storage) ----
 export async function uploadPhoto(userId, blob) {
   const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`

@@ -8,6 +8,7 @@ import {
   fetchHouseholds, createHousehold, joinHouseholdByCode,
   fetchMembers, leaveHousehold, removeMember, setMemberRole, deleteHousehold, inviteByEmail,
   fetchMaps, uploadMapImage, createMap, deleteMap, setContainerPin, clearContainerPin,
+  submitFeedback,
 } from './data'
 import {
   STATUSES, uid, num, money, containerValue, containerProfit,
@@ -19,6 +20,7 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { FREE_FOR_ALL, SHOW_ORDER_LABELS, TERMS_VERSION, COMPANY_NAME, SUPPORT_EMAIL } from './config'
 import { TermsText, PrivacyText } from './LegalText'
 import { HelpText } from './HelpText'
+import { BetaAgreementText } from './BetaText'
 import MapView from './MapView.jsx'
 import { processMapFile } from './maps'
 
@@ -385,7 +387,7 @@ function Main({ user }) {
     scan: 'scan',
     sales: 'sales', expiring: 'sales',
     more: 'more', settings: 'more', households: 'more', batch: 'more', upgrade: 'more', orderlabels: 'more',
-    profile: 'more', help: 'more', terms: 'more', privacy: 'more',
+    profile: 'more', help: 'more', terms: 'more', privacy: 'more', feedback: 'more', beta: 'more',
     maps: 'more', mapview: 'more', mappick: 'list', import: 'more',
   })[view] || 'list'
 
@@ -408,10 +410,12 @@ function Main({ user }) {
       {view === 'help' && <HelpView onBack={() => setView('more')} />}
       {view === 'terms' && <LegalView title="Terms of Service" body={<TermsText />} onBack={() => setView('more')} />}
       {view === 'privacy' && <LegalView title="Privacy Policy" body={<PrivacyText />} onBack={() => setView('more')} />}
+      {view === 'beta' && <LegalView title="Beta program agreement" body={<BetaAgreementText />} onBack={() => setView('more')} />}
       {view === 'maps' && <MapsListView maps={maps} items={items} onOpen={(id) => { setActiveMapId(id); setView('mapview') }} onUpload={uploadAndCreateMap} onDelete={removeMap} onBack={() => setView('more')} />}
       {view === 'mapview' && <MapsViewerView map={maps.find((m) => m.id === activeMapId)} items={items} onOpenBin={(id) => { openDetail(id) }} onBack={() => setView('maps')} />}
       {view === 'mappick' && <PinPickerView map={maps.find((m) => m.id === activeMapId)} container={pinPickFor} onPlace={(x, y) => { placeBinPin(pinPickFor.id, activeMapId, x, y); setPinPickFor(null); setView('detail') }} onBack={() => { setPinPickFor(null); setView('detail') }} />}
       {view === 'import' && <ImportView onImport={importContainers} onBack={() => setView('more')} flash={flash} />}
+      {view === 'feedback' && <FeedbackView user={user} appState={{ items: items.length, households: households.length, space }} onBack={() => setView('more')} flash={flash} />}
       {view === 'more' && <MoreView setView={setView} plan={plan} resellerMode={resellerMode} user={user} />}
       {toast && <div className="toast">{toast}</div>}
 
@@ -419,12 +423,12 @@ function Main({ user }) {
         open={!!printPicker}
         onClose={() => setPrintPicker(null)}
         initialSize={defaultLabelSize || DEFAULT_SIZE}
-        onPick={async (s, remember, includeText) => {
+        onPick={async (s, remember, includeText, copies) => {
           if (remember) {
             setDefaultLabelSize(s)
             try { await saveSettings(user.id, { defaultLabelSize: s }) } catch (e) {}
           }
-          printPicker && printPicker.onPick(s, includeText); setPrintPicker(null)
+          printPicker && printPicker.onPick(s, includeText, copies); setPrintPicker(null)
         }}
       />
 
@@ -584,7 +588,7 @@ function ListView({ items, resellerMode, query, setQuery, sortBy, setSortBy, ope
               <option value="value">Highest value</option>
             </select>
             <button className="iconbtn" title="Select multiple" onClick={() => setSelectMode(true)}>☑</button>
-            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText) => printAll(items, size, includeText))}>🖨</button>
+            <button className="iconbtn" title="Print all labels" onClick={() => printWithPicker((size, includeText, copies) => printAll(items, size, includeText, copies))}>🖨</button>
             <button className="iconbtn" title="Export CSV" onClick={() => exportCSV(items, resellerMode)}>⤓</button>
           </div>
         </>
@@ -807,7 +811,7 @@ function DetailView({ item, resellerMode, onEdit, onDelete, onBack, onQuickAdd, 
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <button className="btn" onClick={() => printWithPicker((size, includeText) => printLabel(item, size, includeText))}>🖨 Print label</button>
+        <button className="btn" onClick={() => printWithPicker((size, includeText, copies) => printLabel(item, size, includeText, copies))}>🖨 Print label</button>
         <button className="btn" onClick={onEdit}>✎ Edit</button>
       </div>
       <button className="btn primary" onClick={onQuickAdd} style={{ marginBottom: 12 }}>＋ Add item to this container</button>
@@ -1474,7 +1478,7 @@ function BatchView({ onCreate, onBack, printWithPicker }) {
             Each label shows a short code (like {shortCode(createdIds[0])}) so you can tell
             them apart. Print them, stick them on, and scan to set up each bin.
           </p>
-          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText) => printBlanks(createdIds, size, includeText))}>🖨 Print these labels</button>
+          <button className="btn primary" style={{ marginBottom: 10 }} onClick={() => printWithPicker((size, includeText, copies) => printBlanks(createdIds, size, includeText, copies))}>🖨 Print these labels</button>
           <button className="btn" onClick={onBack}>Done</button>
         </div>
       )}
@@ -1898,6 +1902,76 @@ function PinPickerView({ map, container, onPlace, onBack }) {
   )
 }
 
+/* ---------------- Feedback ---------------- */
+function FeedbackView({ user, appState, onBack, flash }) {
+  const [kind, setKind] = useState('feedback')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+
+  async function submit() {
+    if (!message.trim()) return
+    setBusy(true)
+    try {
+      await submitFeedback(user.id, user.email, { kind, message: message.trim(), appState })
+      setSubmitted(true)
+    } catch (e) {
+      flash('Could not send. Please try again or email us directly.')
+    } finally { setBusy(false) }
+  }
+
+  if (submitted) return (
+    <>
+      <div className="topbar"><button className="iconbtn" onClick={onBack}>‹</button><h1 style={{ fontSize: 18 }}>Thanks!</h1></div>
+      <div className="full-center center">
+        <div style={{ fontSize: 44 }}>🙏</div>
+        <p style={{ margin: 0, maxWidth: 340 }}>Got it — thanks for taking the time. We read every report.</p>
+        <p className="muted" style={{ fontSize: 13, maxWidth: 340 }}>
+          If we have a follow-up question we'll reach you at <strong>{user.email}</strong>.
+        </p>
+        <button className="btn" style={{ width: 'auto', marginTop: 12 }} onClick={onBack}>Done</button>
+      </div>
+    </>
+  )
+
+  const placeholders = {
+    feedback: 'What worked well, what didn\'t, and what would make this better for you?',
+    bug: 'What did you do, what did you expect, and what happened instead? Including the bin name or step where it went wrong helps a lot.',
+    idea: 'What feature would you like to see? Why would it help you?',
+  }
+
+  return (
+    <>
+      <div className="topbar">
+        <button className="iconbtn" onClick={onBack}>‹</button>
+        <h1 style={{ fontSize: 18 }}>Send feedback</h1>
+      </div>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.6 }}>
+        Tell us what you think. We read every message and reply when something needs a follow-up.
+      </p>
+
+      <label className="field">Type</label>
+      <div className="row" style={{ marginBottom: 14 }}>
+        {[{ k: 'feedback', l: '💬 Feedback' }, { k: 'bug', l: '🐞 Bug' }, { k: 'idea', l: '💡 Idea' }].map((o) => (
+          <button key={o.k} className={kind === o.k ? 'btn primary' : 'btn'} onClick={() => setKind(o.k)} style={{ flex: 1 }}>{o.l}</button>
+        ))}
+      </div>
+
+      <label className="field">Your message</label>
+      <textarea value={message} onChange={(e) => setMessage(e.target.value)}
+        placeholder={placeholders[kind]}
+        style={{ minHeight: 140, marginBottom: 14 }} />
+
+      <button className="btn primary" disabled={busy || !message.trim()} onClick={submit}>
+        {busy ? 'Sending…' : 'Send'}
+      </button>
+      <p className="muted center" style={{ fontSize: 12, marginTop: 12 }}>
+        We'll attach your account email ({user.email}) so we can reply. We also include basic context like your container count to help us reproduce bugs — never the contents of your inventory.
+      </p>
+    </>
+  )
+}
+
 /* ---------------- Onboarding (first-time experience) ---------------- */
 function OnboardingFlow({ onDone, onSkip, onImport, onCreate }) {
   const [step, setStep] = useState(0)
@@ -2182,6 +2256,8 @@ function MoreView({ setView, plan, resellerMode, user }) {
       {SHOW_ORDER_LABELS && <Row icon="🛒" label="Order pre-printed labels" sub="Get labels shipped to you" onClick={() => setView('orderlabels')} />}
       <Row icon="⚙" label="Settings" sub="Reseller mode, plan, account" onClick={() => setView('settings')} />
       <Row icon="❓" label="How to use BinStashR" sub="Quick guide to every feature" onClick={() => setView('help')} />
+      <Row icon="💬" label="Send feedback" sub="Report a bug or suggest an idea" onClick={() => setView('feedback')} />
+      <Row icon="🧪" label="Beta program agreement" sub="What to expect while we're in beta" onClick={() => setView('beta')} />
       <Row icon="📄" label="Terms of Service" onClick={() => setView('terms')} />
       <Row icon="🔒" label="Privacy Policy" onClick={() => setView('privacy')} />
     </>
@@ -2267,8 +2343,9 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
   const [sel, setSel] = useState(initialSize || DEFAULT_SIZE)
   const [remember, setRemember] = useState(false)
   const [includeText, setIncludeText] = useState(true)
+  const [doubleUp, setDoubleUp] = useState(false)
   const [previewQR, setPreviewQR] = useState('')
-  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true) } }, [open, initialSize])
+  useEffect(() => { if (open) { setSel(initialSize || DEFAULT_SIZE); setRemember(false); setIncludeText(true); setDoubleUp(false) } }, [open, initialSize])
   useEffect(() => { if (open) qrDataUrl('PREVIEW', 180).then(setPreviewQR) }, [open])
   if (!open) return null
   const size = LABEL_SIZES.find((s) => s.id === sel) || LABEL_SIZES[0]
@@ -2289,7 +2366,7 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
         </p>
 
         <div style={{ background: 'var(--surface-2)', borderRadius: 9, padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <p className="muted" style={{ fontSize: 12, margin: 0 }}>Preview · {size.w}″ × {size.h}″</p>
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>Preview · {size.w}″ × {size.h}″{doubleUp ? ' · 2 per bin' : ''}</p>
           <div style={{
             width: previewW, height: previewH, background: '#fff',
             border: '1px solid #999', borderRadius: 4,
@@ -2322,13 +2399,17 @@ function PrintSizePicker({ open, onClose, onPick, initialSize }) {
           Include bin name & info on label
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={doubleUp} onChange={(e) => setDoubleUp(e.target.checked)} style={{ width: 'auto' }} />
+          Print 2 labels per bin <span className="muted" style={{ fontSize: 12 }}>(one for each end)</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ width: 'auto' }} />
           Remember as my default size
         </label>
 
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={() => onPick(sel, remember, includeText)}>Print</button>
+          <button className="btn primary" onClick={() => onPick(sel, remember, includeText, doubleUp ? 2 : 1)}>Print</button>
         </div>
       </div>
     </div>

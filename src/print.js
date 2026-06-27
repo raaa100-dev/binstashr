@@ -6,7 +6,8 @@ import { shortCode } from './utils'
 // labels flow in a grid that matches Avery layouts.
 export const LABEL_SIZES = [
   { id: 'letter',       label: 'Letter sheet (1 big label)', w: 4,      h: 3,      kind: 'sheet',   gridCols: 1, gridRows: 1 },
-  { id: 'avery-5160',   label: 'Avery 5160 (1×2-5/8")',      w: 2.625,  h: 1,      kind: 'sheet',   gridCols: 3, gridRows: 10 },
+  { id: 'avery-5160',   label: 'Avery 5160 (1×2-5/8")',      w: 2.625,  h: 1,      kind: 'sheet',   gridCols: 3, gridRows: 10, colGap: 0.125, sheetMarginV: 0.5, sheetMarginH: 0.1875 },
+  { id: 'ol875',        label: '2.5×1.563" (8 per sheet)',   w: 2.5,    h: 1.563,  kind: 'sheet',   gridCols: 3, gridRows: 6 },
   { id: 'dymo-30252',   label: 'Dymo 30252 (1-1/8×3-1/2")',  w: 3.5,    h: 1.125,  kind: 'roll' },
   { id: 'brother-dk1201', label: 'Brother DK-1201 (1.1×3.5")', w: 3.5,  h: 1.1,    kind: 'roll' },
   { id: '2x4',          label: '2×4" shipping',              w: 4,      h: 2,      kind: 'roll' },
@@ -50,11 +51,19 @@ async function buildSheet(labels, sizeId) {
        body { margin: 0; padding: 0; }
        .lbl { page-break-after: always; }
        .lbl:last-child { page-break-after: auto; }`
-    : size.id === 'avery-5160'
-      ? `@page { size: letter; margin: 0.5in 0.1875in; }
-         body { margin: 0; }
-         .sheet { display: grid; grid-template-columns: repeat(${size.gridCols}, ${size.w}in); grid-auto-rows: ${size.h}in; column-gap: 0.125in; }
-         .lbl { box-sizing: border-box; }`
+    : (size.gridCols > 1 && size.gridRows > 1)
+      ? (() => {
+          const colGap = size.colGap || 0
+          const rowGap = size.rowGap || 0
+          const totalW = size.w * size.gridCols + colGap * (size.gridCols - 1)
+          const totalH = size.h * size.gridRows + rowGap * (size.gridRows - 1)
+          const mh = size.sheetMarginH !== undefined ? size.sheetMarginH : Math.max(0.25, (8.5 - totalW) / 2)
+          const mv = size.sheetMarginV !== undefined ? size.sheetMarginV : Math.max(0.25, (11 - totalH) / 2)
+          return `@page { size: letter; margin: ${mv}in ${mh}in; }
+             body { margin: 0; }
+             .sheet { display: grid; grid-template-columns: repeat(${size.gridCols}, ${size.w}in); grid-auto-rows: ${size.h}in; column-gap: ${colGap}in; row-gap: ${rowGap}in; }
+             .lbl { box-sizing: border-box; }`
+        })()
       : `@page { size: letter; margin: 0.5in; }
          body { margin: 0; }
          .lbl { margin: 0 auto 0.5in; }`
@@ -79,32 +88,39 @@ function openPrint(html) {
 }
 
 // Print one label for a single container, at the given size.
-export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true) {
+export async function printLabel(item, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
   const lines = includeText ? [item.name || 'Untitled'] : []
   if (includeText) {
     if (item.category) lines.push(item.category)
     if (item.location) lines.push(item.location)
   }
-  openPrint(await buildSheet([{ id: item.id, lines }], sizeId))
+  const one = { id: item.id, lines }
+  const labels = Array.from({ length: copies }, () => one)
+  openPrint(await buildSheet(labels, sizeId))
 }
 
 // Print labels for many containers, at the given size.
-export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true) {
+export async function printAll(items, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
   if (!items.length) return
-  const labels = items.map((it) => {
+  const labels = []
+  for (const it of items) {
     const lines = includeText ? [it.name || 'Untitled'] : []
     if (includeText) {
       if (it.category) lines.push(it.category)
       if (it.location) lines.push(it.location)
     }
-    return { id: it.id, lines }
-  })
+    for (let n = 0; n < copies; n++) labels.push({ id: it.id, lines })
+  }
   openPrint(await buildSheet(labels, sizeId))
 }
 
 // Print blank labels (just QR + short human-readable code).
-export async function printBlanks(ids, sizeId = DEFAULT_SIZE, includeText = true) {
+export async function printBlanks(ids, sizeId = DEFAULT_SIZE, includeText = true, copies = 1) {
   if (!ids.length) return
-  const labels = ids.map((id) => ({ id, lines: includeText ? [shortCode(id)] : [] }))
+  const labels = []
+  for (const id of ids) {
+    const label = { id, lines: includeText ? [shortCode(id)] : [] }
+    for (let n = 0; n < copies; n++) labels.push(label)
+  }
   openPrint(await buildSheet(labels, sizeId))
 }
